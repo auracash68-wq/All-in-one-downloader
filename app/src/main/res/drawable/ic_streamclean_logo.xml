@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp"
+    android:height="36dp"
+    android:viewportWidth="36"
+    android:viewportHeight="36">
+    <!-- Green rounded container -->
+    <path
+        android:fillColor="#1B6F3E"
+        android:pathData="M7,2 h22 c2.8,0 5,2.2 5,5 v22 c0,2.8 -2.2,5 -5,5 h-22 c-2.8,0 -5,-2.2 -5,-5 v-22 c0,-2.8 2.2,-5 5,-5 Z" />
+
+    <!-- White download arrow -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M16,10 h4 v9 h4 l-6,7 -6,-7 h4 Z" />
+
+    <!-- White bottom tray -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M11,27 h14 c0.6,0 1,0.4 1,1 s-0.4,1 -1,1 h-14 c-0.6,0 -1,-0.4 -1,-1 s0.4,-1 1,-1 Z" />
+</vector>

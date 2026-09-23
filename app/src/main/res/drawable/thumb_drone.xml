@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Golden sunset mountain sky -->
+    <path android:pathData="M0,0h120v120h-120z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="120"
+                android:endY="120"
+                android:type="linear">
+                <item android:color="#FDBA74" android:offset="0.0" />
+                <item android:color="#F97316" android:offset="0.4" />
+                <item android:color="#4338CA" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Distant mountain ridges -->
+    <path
+        android:fillColor="#6366F1"
+        android:pathData="M0,75 L30,45 L70,80 L95,55 L120,70 L120,120 L0,120 Z" />
+    <!-- Foreground dark mountain -->
+    <path
+        android:fillColor="#1E1B4B"
+        android:pathData="M0,90 L40,65 L85,95 L120,80 L120,120 L0,120 Z" />
+    <!-- White drone silhouette -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M55,30 h10 v3 h-10 Z M52,28 h4 v2 h-4 Z M64,28 h4 v2 h-4 Z" />
+</vector>

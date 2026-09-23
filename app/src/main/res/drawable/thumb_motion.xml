@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Clean dashboard UI frame -->
+    <path
+        android:fillColor="#F1F5F9"
+        android:pathData="M0,0h120v120h-120z" />
+    <!-- White card container inside -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10,15 h100 v90 h-100 Z" />
+    <!-- Dashboard header row -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M18,25 h15 v4 h-15 Z" />
+    <path
+        android:fillColor="#CBD5E1"
+        android:pathData="M40,25 h40 v4 h-40 Z" />
+    <!-- Curved motion spline graph line -->
+    <path
+        android:strokeColor="#10B981"
+        android:strokeWidth="3"
+        android:fillColor="#00000000"
+        android:pathData="M18,75 Q40,40 60,65 T102,45" />
+    <!-- Bar charts -->
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M25,85 h10 v12 h-10 Z M45,78 h10 v19 h-10 Z M65,82 h10 v15 h-10 Z M85,72 h10 v25 h-10 Z" />
+</vector>

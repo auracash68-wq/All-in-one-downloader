@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Cozy desk workspace background -->
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M0,0h120v120h-120z" />
+    <!-- Desk monitor stand -->
+    <path
+        android:fillColor="#475569"
+        android:pathData="M55,80 h10 v15 h-10 Z M45,95 h30 v3 h-30 Z" />
+    <!-- Monitor display frame -->
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M20,25 h80 v55 h-80 Z" />
+    <!-- Screen content: wireframe code/design UI -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M24,29 h72 v47 h-72 Z" />
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M30,35 h25 v12 h-25 Z" />
+    <path
+        android:fillColor="#94A3B8"
+        android:pathData="M60,35 h30 v4 h-30 Z M60,42 h20 v3 h-20 Z M30,53 h60 v3 h-60 Z M30,60 h45 v3 h-45 Z" />
+</vector>

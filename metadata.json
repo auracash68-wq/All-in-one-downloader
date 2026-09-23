@@ -1,0 +1,6 @@
+{
+  "name": "StreamClean",
+  "description": "Clean, offline, all-in-one video downloader with built-in player, format selector, and in-app browser",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

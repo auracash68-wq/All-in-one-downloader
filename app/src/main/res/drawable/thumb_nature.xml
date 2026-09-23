@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Sky / mist background -->
+    <path android:pathData="M0,0h120v120h-120z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="60"
+                android:startY="0"
+                android:endX="60"
+                android:endY="120"
+                android:type="linear">
+                <item android:color="#E2E8F0" android:offset="0.0" />
+                <item android:color="#94A3B8" android:offset="0.6" />
+                <item android:color="#2D3748" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Background misty trees -->
+    <path
+        android:fillColor="#475569"
+        android:pathData="M15,120 L25,60 L35,120 Z M45,120 L55,50 L65,120 Z M75,120 L85,55 L95,120 Z M100,120 L110,65 L120,120 Z" />
+    <!-- Foreground dark pine trees -->
+    <path
+        android:fillColor="#1E293B"
+        android:pathData="M0,120 L15,40 L30,120 Z M25,120 L40,30 L55,120 Z M50,120 L68,35 L86,120 Z M80,120 L98,25 L116,120 Z" />
+</vector>
