@@ -17,16 +17,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -35,7 +31,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Refresh
@@ -116,7 +111,6 @@ fun ChromeBrowserScreen(
         modifier = modifier
             .fillMaxSize()
             .background(AppBackground)
-            .windowInsetsPadding(WindowInsets.statusBars)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Chrome-Style Omnibox Top Bar
@@ -223,26 +217,6 @@ fun ChromeBrowserScreen(
                             contentDescription = if (isLoading) "Stop" else "Reload",
                             tint = TextSecondary,
                             modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    // Download this Page Media Button
-                    IconButton(
-                        onClick = {
-                            viewModel.downloadFromBrowser(currentUrl)
-                            Toast.makeText(context, "Link copied to Download tab!", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(MintGreenLight)
-                            .testTag("browser_download_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Download,
-                            contentDescription = "Download Video",
-                            tint = MintGreenPillDarkText,
-                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -376,33 +350,6 @@ fun ChromeBrowserScreen(
                 )
 
                 Spacer(modifier = Modifier.weight(1f))
-
-                // Direct download shortcut
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MintGreenLight)
-                        .clickable {
-                            viewModel.downloadFromBrowser(currentUrl)
-                            Toast.makeText(context, "Link pasted into Download tab!", Toast.LENGTH_SHORT).show()
-                        }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Download,
-                        contentDescription = null,
-                        tint = MintGreenPillDarkText,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Download",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MintGreenPillDarkText
-                    )
-                }
             }
         }
     }

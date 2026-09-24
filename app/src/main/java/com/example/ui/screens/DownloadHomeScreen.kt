@@ -13,15 +13,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,7 +99,6 @@ fun DownloadHomeScreen(
         modifier = modifier
             .fillMaxSize()
             .background(AppBackground)
-            .windowInsetsPadding(WindowInsets.statusBars)
     ) {
         Column(
             modifier = Modifier
@@ -110,27 +106,6 @@ fun DownloadHomeScreen(
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
-            // Top App Brand Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp)
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.ic_streamclean_logo),
-                    contentDescription = "StreamClean Logo",
-                    modifier = Modifier.size(34.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "StreamClean",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-            }
-
             // Screen Title & Subtitle
             Text(
                 text = "Download",
