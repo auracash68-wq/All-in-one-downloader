@@ -8,6 +8,8 @@ import com.example.data.repository.DownloadRepository
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.youtubedl_android.mapper.VideoFormat
+import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,15 +31,36 @@ data class VideoFormatInfo(
     val resolution: String,
     val note: String = "",
     val ext: String = "mp4",
-    val filesizeApprox: String = ""
+    val filesizeApprox: String = "",
+    val isAudio: Boolean = false
 )
 
 data class VideoMetadata(
     val title: String,
     val duration: String,
+    val durationSeconds: Int = 0,
     val thumbnailUrl: String?,
+    val videoFormats: List<VideoFormatInfo> = emptyList(),
+    val audioFormats: List<VideoFormatInfo> = emptyList()
+) {
+    // Convenience property for backwards compatibility
     val formats: List<VideoFormatInfo>
-)
+        get() = if (videoFormats.isNotEmpty()) videoFormats else audioFormats
+
+    constructor(
+        title: String,
+        duration: String,
+        thumbnailUrl: String?,
+        formats: List<VideoFormatInfo>
+    ) : this(
+        title = title,
+        duration = duration,
+        durationSeconds = 0,
+        thumbnailUrl = thumbnailUrl,
+        videoFormats = formats,
+        audioFormats = emptyList()
+    )
+}
 
 data class ActiveDownloadState(
     val id: Long = 0,
@@ -61,7 +84,6 @@ class DownloadEngine private constructor(private val context: Context) {
 
     private var currentProcessId: String? = null
     private var isCancelled = false
-    private var currentDownloadJob: Job? = null
 
     private data class DownloadTask(
         val entityId: Long,
@@ -69,7 +91,10 @@ class DownloadEngine private constructor(private val context: Context) {
         val title: String,
         val mediaType: String,
         val resolution: String,
+        val formatId: String,
         val audioBitrate: String,
+        val thumbnailUrl: String?,
+        val duration: String,
         val repository: DownloadRepository
     )
 
@@ -86,37 +111,29 @@ class DownloadEngine private constructor(private val context: Context) {
 
     suspend fun fetchFormats(url: String): VideoMetadata = withContext(Dispatchers.IO) {
         try {
-            // Attempt to get video info using YoutubeDL
-            val request = YoutubeDLRequest(url).apply {
-                addOption("--dump-single-json")
-                addOption("--no-playlist")
-            }
-            val response = YoutubeDL.getInstance().execute(request)
-            val output = response.out
+            Log.d(TAG, "Fetching real video info for: $url")
+            val videoInfo: VideoInfo = YoutubeDL.getInstance().getInfo(url)
+            val title = videoInfo.title?.takeIf { it.isNotBlank() } ?: generateFallbackTitle(url)
+            val durationSecs = videoInfo.duration
+            val durationStr = formatDuration(durationSecs)
+            val thumb = videoInfo.thumbnail
 
-            // Parse or fallback to sensible defaults
-            val title = extractTitleFromOutput(output) ?: generateFallbackTitle(url)
-            val duration = "03:45"
-            val formats = listOf(
-                VideoFormatInfo("1080p", "1080p (Full HD)", "High quality", "mp4", "~65 MB"),
-                VideoFormatInfo("720p", "720p (HD - Recommended)", "Balanced RAM & quality", "mp4", "~32 MB"),
-                VideoFormatInfo("480p", "480p (SD)", "Fast download", "mp4", "~18 MB"),
-                VideoFormatInfo("360p", "360p (Low)", "Ultra light memory", "mp4", "~10 MB")
-            )
-            VideoMetadata(title, duration, null, formats)
-        } catch (e: Exception) {
-            Log.w(TAG, "YoutubeDL format fetch error, providing default profiles: ${e.message}")
-            val fallbackTitle = generateFallbackTitle(url)
+            val videoFormats = parseVideoFormats(videoInfo.formats)
+            val audioFormats = parseAudioFormats(videoInfo.formats, durationSecs)
+
+            Log.d(TAG, "Fetched video: $title, duration: $durationStr, videoFormats: ${videoFormats.size}, audioFormats: ${audioFormats.size}")
+
             VideoMetadata(
-                title = fallbackTitle,
-                duration = "04:12",
-                thumbnailUrl = null,
-                formats = listOf(
-                    VideoFormatInfo("1080p", "1080p (Full HD)", "High quality", "mp4", "~65 MB"),
-                    VideoFormatInfo("720p", "720p (HD - Recommended)", "Default", "mp4", "~32 MB"),
-                    VideoFormatInfo("480p", "480p (SD)", "Fast", "mp4", "~18 MB")
-                )
+                title = title,
+                duration = durationStr,
+                durationSeconds = durationSecs,
+                thumbnailUrl = thumb,
+                videoFormats = videoFormats,
+                audioFormats = audioFormats
             )
+        } catch (e: Exception) {
+            Log.e(TAG, "YoutubeDL getInfo failed: ${e.message}", e)
+            throw e
         }
     }
 
@@ -126,19 +143,34 @@ class DownloadEngine private constructor(private val context: Context) {
         title: String,
         mediaType: String,
         resolution: String,
-        audioBitrate: String,
+        formatId: String = "",
+        audioBitrate: String = "192kbps",
+        thumbnailUrl: String? = null,
+        duration: String = "03:45",
         repository: DownloadRepository
     ) {
-        val task = DownloadTask(entityId, url, title, mediaType, resolution, audioBitrate, repository)
+        val task = DownloadTask(
+            entityId = entityId,
+            url = url,
+            title = title,
+            mediaType = mediaType,
+            resolution = resolution,
+            formatId = formatId,
+            audioBitrate = audioBitrate,
+            thumbnailUrl = thumbnailUrl,
+            duration = duration,
+            repository = repository
+        )
         downloadChannel.trySend(task)
     }
 
     private suspend fun processDownloadTask(task: DownloadTask) = withContext(Dispatchers.IO) {
         val downloadDir = getDownloadDirectory()
         val extension = if (task.mediaType == "AUDIO") "mp3" else "mp4"
-        val safeFileName = sanitizeFileName(task.title) + ".$extension"
+        val safeTitle = sanitizeFileName(task.title).take(80)
+        val safeFileName = "${safeTitle}_${System.currentTimeMillis() % 10000}.$extension"
         val outputFile = File(downloadDir, safeFileName)
-        val processId = "dl_${System.currentTimeMillis()}"
+        val processId = "dl_${task.entityId}_${System.currentTimeMillis()}"
         currentProcessId = processId
         isCancelled = false
 
@@ -147,8 +179,10 @@ class DownloadEngine private constructor(private val context: Context) {
             title = task.title,
             fileName = safeFileName,
             progress = 0,
+            speed = "Starting...",
+            eta = "",
             isRunning = true,
-            thumbnailUrl = null
+            thumbnailUrl = task.thumbnailUrl
         )
 
         try {
@@ -157,36 +191,57 @@ class DownloadEngine private constructor(private val context: Context) {
                 val request = YoutubeDLRequest(task.url).apply {
                     addOption("-o", outputFile.absolutePath)
                     addOption("--no-mtime")
-                    addOption("--no-part") // Minimize fragmented temp files for low RAM
+                    addOption("--no-playlist")
+                    addOption("--no-part")
+
                     if (task.mediaType == "AUDIO") {
                         addOption("-x")
                         addOption("--audio-format", "mp3")
-                        val bitrate = task.audioBitrate.replace("kbps", "").trim()
-                        addOption("--audio-quality", bitrate.ifEmpty { "192" })
-                    } else {
-                        val maxRes = when (task.resolution) {
-                            "1080p" -> "1080"
-                            "480p" -> "480"
-                            "360p" -> "360"
-                            else -> "720"
+                        val bitrate = if (task.formatId.contains("kbps")) {
+                            task.formatId.replace("kbps", "").trim()
+                        } else {
+                            task.audioBitrate.replace("kbps", "").trim().ifEmpty { "192" }
                         }
-                        addOption("-f", "bestvideo[height<=$maxRes]+bestaudio/best[height<=$maxRes]/best")
+                        addOption("--audio-quality", bitrate)
+                    } else {
+                        val fmt = task.formatId.ifEmpty {
+                            when (task.resolution) {
+                                "1080p" -> "1080p"
+                                "480p" -> "480p"
+                                "360p" -> "360p"
+                                else -> "720p"
+                            }
+                        }
+
+                        if (fmt == "best" || fmt == "worst") {
+                            addOption("-f", fmt)
+                        } else if (fmt.contains("p") && !fmt.contains("+") && !fmt.contains("/")) {
+                            val h = fmt.replace("p", "").trim()
+                            addOption("-f", "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best")
+                        } else if (!fmt.contains("+") && !fmt.contains("/")) {
+                            addOption("-f", "$fmt+bestaudio/best")
+                        } else {
+                            addOption("-f", fmt)
+                        }
+                        addOption("--merge-output-format", "mp4")
                     }
                 }
 
+                Log.d(TAG, "Starting YoutubeDL download for ${task.title} with processId: $processId")
                 YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
                     if (!isCancelled) {
                         val p = progress.toInt().coerceIn(0, 100)
+                        val spd = extractSpeed(line)
                         _activeDownload.value = _activeDownload.value?.copy(
                             progress = p,
-                            speed = extractSpeed(line),
+                            speed = spd,
                             eta = if (etaInSeconds > 0) "${etaInSeconds}s" else ""
                         )
                     }
                 }
                 downloadSuccess = outputFile.exists() && outputFile.length() > 0
-            } catch (e: YoutubeDLException) {
-                Log.w(TAG, "YoutubeDL execution error, running direct engine: ${e.message}")
+            } catch (e: Exception) {
+                Log.w(TAG, "YoutubeDL execution notice: ${e.message}")
             }
 
             // Fallback direct stream downloader if needed
@@ -195,19 +250,25 @@ class DownloadEngine private constructor(private val context: Context) {
             }
 
             if (downloadSuccess && !isCancelled) {
-                val fileSize = outputFile.length().coerceAtLeast(1024L)
+                val actualFile = if (outputFile.exists() && outputFile.length() > 0) {
+                    outputFile
+                } else {
+                    downloadDir.listFiles()?.filter { it.name.startsWith(safeTitle) }?.maxByOrNull { it.lastModified() } ?: outputFile
+                }
+
+                val fileSize = actualFile.length().coerceAtLeast(1024L)
                 val formattedSize = formatFileSize(fileSize)
 
                 val updatedEntity = DownloadEntity(
                     id = task.entityId,
                     url = task.url,
                     title = task.title,
-                    fileName = safeFileName,
-                    filePath = outputFile.absolutePath,
+                    fileName = actualFile.name,
+                    filePath = actualFile.absolutePath,
                     fileSizeBytes = fileSize,
                     formattedSize = formattedSize,
-                    duration = if (task.mediaType == "AUDIO") "03:30" else "04:12",
-                    thumbnailUri = null,
+                    duration = task.duration,
+                    thumbnailUri = task.thumbnailUrl,
                     mediaType = task.mediaType,
                     resolution = task.resolution,
                     status = "COMPLETED",
@@ -216,7 +277,7 @@ class DownloadEngine private constructor(private val context: Context) {
                     timestamp = System.currentTimeMillis()
                 )
                 task.repository.updateDownload(updatedEntity)
-                Log.d(TAG, "Download finished successfully: ${outputFile.name}")
+                Log.d(TAG, "Download finished successfully: ${actualFile.name}")
             } else if (isCancelled) {
                 cleanupTempFiles(downloadDir, safeFileName)
                 task.repository.deleteDownload(
@@ -367,6 +428,115 @@ class DownloadEngine private constructor(private val context: Context) {
             val kb = bytes.toDouble() / 1024
             String.format("%.1f KB", kb)
         }
+    }
+
+    private fun parseVideoFormats(formats: List<VideoFormat>?): List<VideoFormatInfo> {
+        if (formats.isNullOrEmpty()) {
+            return defaultVideoFormats()
+        }
+
+        // Filter formats that contain video (vcodec != "none" or height > 0)
+        val videoFormats = formats.filter {
+            val hasVideo = (it.vcodec != null && it.vcodec != "none") || it.height > 0
+            hasVideo
+        }
+
+        if (videoFormats.isEmpty()) {
+            return defaultVideoFormats()
+        }
+
+        // Group by height descending
+        val groupedByHeight = videoFormats
+            .filter { it.height > 0 }
+            .groupBy { it.height }
+            .toSortedMap(compareByDescending { it })
+
+        val result = mutableListOf<VideoFormatInfo>()
+
+        for ((height, list) in groupedByHeight) {
+            val best = list.maxByOrNull {
+                val s = if (it.fileSize > 0) it.fileSize else it.fileSizeApproximate
+                s
+            } ?: list.first()
+
+            val sizeBytes = if (best.fileSize > 0) best.fileSize else best.fileSizeApproximate
+            val sizeStr = if (sizeBytes > 0) "~${formatFileSize(sizeBytes)}" else ""
+
+            val resLabel = when (height) {
+                2160 -> "4K (2160p)"
+                1440 -> "2K (1440p)"
+                1080 -> "1080p (Full HD)"
+                720 -> "720p (HD - Recommended)"
+                480 -> "480p (SD)"
+                360 -> "360p (Low)"
+                240 -> "240p (Economy)"
+                144 -> "144p (Very Low)"
+                else -> "${height}p"
+            }
+
+            val note = best.formatNote ?: if (height >= 720) "High Quality" else "Standard"
+            val fmtId = best.formatId ?: "${height}p"
+
+            result.add(
+                VideoFormatInfo(
+                    formatId = fmtId,
+                    resolution = resLabel,
+                    note = note,
+                    ext = best.ext ?: "mp4",
+                    filesizeApprox = sizeStr,
+                    isAudio = false
+                )
+            )
+        }
+
+        if (result.isEmpty()) {
+            return defaultVideoFormats()
+        }
+        return result
+    }
+
+    private fun parseAudioFormats(formats: List<VideoFormat>?, durationSecs: Int): List<VideoFormatInfo> {
+        val standardBitrates = listOf(
+            Triple("320kbps", "320 kbps (Ultra High Quality)", "Studio Master • MP3"),
+            Triple("256kbps", "256 kbps (High Quality)", "Crystal Clear • MP3"),
+            Triple("192kbps", "192 kbps (Standard Quality)", "Recommended • MP3"),
+            Triple("128kbps", "128 kbps (Medium Quality)", "Data Saver • MP3"),
+            Triple("64kbps", "64 kbps (Low Quality)", "Ultra Compact • MP3")
+        )
+
+        return standardBitrates.map { (bitrateKey, title, note) ->
+            val kbps = bitrateKey.replace("kbps", "").toIntOrNull() ?: 192
+            val approxBytes = if (durationSecs > 0) {
+                (durationSecs.toLong() * kbps * 1000L) / 8L
+            } else {
+                (240L * kbps * 1000L) / 8L
+            }
+            VideoFormatInfo(
+                formatId = bitrateKey,
+                resolution = title,
+                note = note,
+                ext = "mp3",
+                filesizeApprox = "~${formatFileSize(approxBytes)}",
+                isAudio = true
+            )
+        }
+    }
+
+    private fun defaultVideoFormats(): List<VideoFormatInfo> {
+        return listOf(
+            VideoFormatInfo("1080p", "1080p (Full HD)", "High quality", "mp4", "~65 MB"),
+            VideoFormatInfo("720p", "720p (HD - Recommended)", "Balanced RAM & quality", "mp4", "~32 MB"),
+            VideoFormatInfo("480p", "480p (SD)", "Fast download", "mp4", "~18 MB"),
+            VideoFormatInfo("360p", "360p (Low)", "Ultra light memory", "mp4", "~10 MB")
+        )
+    }
+
+    private fun formatDuration(seconds: Int): String {
+        if (seconds <= 0) return "03:45"
+        val h = seconds / 3600
+        val m = (seconds % 3600) / 60
+        val s = seconds % 60
+        return if (h > 0) String.format("%02d:%02d:%02d", h, m, s) else String.format("%02d:%02d", m, s)
     }
 
     companion object {

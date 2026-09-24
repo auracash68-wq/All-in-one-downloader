@@ -9,6 +9,8 @@ import android.provider.MediaStore
 import android.util.Log
 import com.example.data.local.DownloadDao
 import com.example.data.local.DownloadEntity
+import com.example.engine.DownloadEngine
+import com.example.engine.VideoMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -24,6 +26,11 @@ class DownloadRepository(
     val videoDownloads: Flow<List<DownloadEntity>> = downloadDao.getDownloadsByType("VIDEO")
     val audioDownloads: Flow<List<DownloadEntity>> = downloadDao.getDownloadsByType("AUDIO")
     val activeDownloads: Flow<List<DownloadEntity>> = downloadDao.getActiveDownloads()
+
+    suspend fun fetchVideoInfo(url: String): VideoMetadata = withContext(Dispatchers.IO) {
+        val engine = DownloadEngine.getInstance(context)
+        engine.fetchFormats(url)
+    }
 
     suspend fun getDownloadById(id: Long): DownloadEntity? = withContext(Dispatchers.IO) {
         downloadDao.getDownloadById(id)

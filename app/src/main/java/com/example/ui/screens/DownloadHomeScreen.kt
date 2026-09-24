@@ -63,6 +63,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.engine.VideoFormatInfo
 import com.example.ui.theme.AppBackground
@@ -87,6 +88,7 @@ fun DownloadHomeScreen(
     val urlInput by viewModel.urlInput.collectAsState()
     val selectedFormatTab by viewModel.selectedFormatTab.collectAsState()
     val activeDownload by viewModel.activeDownload.collectAsState()
+    val videoPreview by viewModel.videoPreview.collectAsState()
     val formatDialogMetadata by viewModel.formatDialogMetadata.collectAsState()
     val isLoadingFormats by viewModel.isLoadingFormats.collectAsState()
 
@@ -316,19 +318,26 @@ fun DownloadHomeScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             // Active Download Card (Matching Image 4)
-            // Displays real download state if active, or initial mockup demo matching Image 4
+            // Displays real download state if active, real fetched preview, or initial mockup demo matching Image 4
             val isDownloading = activeDownload != null && activeDownload!!.isRunning
-            val hasActiveCard = isDownloading || showMockActiveDownload
+            val preview = videoPreview
+            val hasActiveCard = isDownloading || preview != null || showMockActiveDownload
 
             AnimatedVisibility(
                 visible = hasActiveCard,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                val filename = if (isDownloading) {
-                    activeDownload?.fileName ?: "downloading_video.mp4"
-                } else {
-                    "nature_documentary_4k.mp4"
+                val filename = when {
+                    isDownloading -> activeDownload?.title?.ifEmpty { activeDownload?.fileName } ?: "downloading_video.mp4"
+                    preview != null -> preview.title
+                    else -> "nature_documentary_4k.mp4"
+                }
+
+                val currentThumb = when {
+                    isDownloading -> activeDownload?.thumbnailUrl
+                    preview != null -> preview.thumbnailUrl
+                    else -> null
                 }
 
                 val progressInt = if (isDownloading) {
@@ -338,6 +347,19 @@ fun DownloadHomeScreen(
                 }
 
                 val progressFloat = progressInt / 100f
+
+                val statusText = when {
+                    isDownloading -> {
+                        val speed = activeDownload?.speed.orEmpty()
+                        if (speed.isNotEmpty() && speed != "Starting...") {
+                            "Downloading • $progressInt% ($speed)"
+                        } else {
+                            "Downloading • $progressInt%"
+                        }
+                    }
+                    preview != null -> "Ready to download • ${preview.duration}"
+                    else -> "Downloading • 42%"
+                }
 
                 Card(
                     shape = RoundedCornerShape(16.dp),
@@ -353,15 +375,28 @@ fun DownloadHomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            // Thumbnail
-                            Image(
-                                painter = painterResource(id = R.drawable.thumb_nature),
-                                contentDescription = "Video Thumbnail",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(54.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                            )
+                            // Thumbnail (Real thumbnail via Coil AsyncImage or default fallback)
+                            if (!currentThumb.isNullOrEmpty()) {
+                                AsyncImage(
+                                    model = currentThumb,
+                                    contentDescription = "Video Thumbnail",
+                                    contentScale = ContentScale.Crop,
+                                    placeholder = painterResource(id = R.drawable.thumb_nature),
+                                    error = painterResource(id = R.drawable.thumb_nature),
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(id = R.drawable.thumb_nature),
+                                    contentDescription = "Video Thumbnail",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                )
+                            }
 
                             Spacer(modifier = Modifier.width(14.dp))
 
@@ -376,7 +411,7 @@ fun DownloadHomeScreen(
                                 )
                                 Spacer(modifier = Modifier.height(3.dp))
                                 Text(
-                                    text = "Downloading • $progressInt%",
+                                    text = statusText,
                                     fontSize = 13.sp,
                                     color = TextSecondary
                                 )
@@ -388,6 +423,7 @@ fun DownloadHomeScreen(
                                     if (isDownloading) {
                                         viewModel.cancelActiveDownload()
                                     } else {
+                                        viewModel.clearPreview()
                                         showMockActiveDownload = false
                                     }
                                 },
@@ -402,24 +438,26 @@ fun DownloadHomeScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        if (isDownloading || showMockActiveDownload) {
+                            Spacer(modifier = Modifier.height(14.dp))
 
-                        // Progress Bar (Green indicator, light mint track)
-                        LinearProgressIndicator(
-                            progress = { progressFloat },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.5.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            color = PrimaryGreen,
-                            trackColor = MintGreenLight,
-                        )
+                            // Progress Bar (Green indicator, light mint track)
+                            LinearProgressIndicator(
+                                progress = { progressFloat },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.5.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = PrimaryGreen,
+                                trackColor = MintGreenLight,
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Quality Selection Dialog (fetching formats using yt-dlp -F)
+        // Quality Selection Dialog (fetching formats dynamically using yt-dlp)
         formatDialogMetadata?.let { metadata ->
             FormatSelectionDialog(
                 metadata = metadata,
@@ -440,9 +478,20 @@ fun FormatSelectionDialog(
     onDismiss: () -> Unit,
     onConfirm: (VideoFormatInfo) -> Unit
 ) {
-    val formats = metadata.formats
-    var selectedFormat by remember {
-        mutableStateOf(formats.find { it.formatId == "720p" } ?: formats.firstOrNull() ?: VideoFormatInfo("720p", "720p (HD)"))
+    val formats = if (isAudio) {
+        if (metadata.audioFormats.isNotEmpty()) metadata.audioFormats else metadata.formats
+    } else {
+        if (metadata.videoFormats.isNotEmpty()) metadata.videoFormats else metadata.formats
+    }
+
+    var selectedFormat by remember(metadata, isAudio) {
+        mutableStateOf(
+            if (isAudio) {
+                formats.find { it.formatId.contains("192") } ?: formats.firstOrNull() ?: VideoFormatInfo("192kbps", "192 kbps (Standard Quality)", "Recommended • MP3", "mp3", isAudio = true)
+            } else {
+                formats.find { it.formatId.contains("720") } ?: formats.firstOrNull() ?: VideoFormatInfo("720p", "720p (HD - Recommended)", ext = "mp4")
+            }
+        )
     }
 
     AlertDialog(

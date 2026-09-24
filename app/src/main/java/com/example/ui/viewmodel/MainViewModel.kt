@@ -18,6 +18,7 @@ import com.example.engine.VideoFormatInfo
 import com.example.engine.VideoMetadata
 import com.example.service.DownloadService
 import com.example.ui.components.StreamCleanTab
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -57,6 +59,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Active video being played in in-app ExoPlayer
     private val _playingVideo = MutableStateFlow<DownloadEntity?>(null)
     val playingVideo: StateFlow<DownloadEntity?> = _playingVideo.asStateFlow()
+
+    // Real video preview state (fetched from URL)
+    private val _videoPreview = MutableStateFlow<VideoMetadata?>(null)
+    val videoPreview: StateFlow<VideoMetadata?> = _videoPreview.asStateFlow()
 
     // Format selection dialog state
     private val _formatDialogMetadata = MutableStateFlow<VideoMetadata?>(null)
@@ -106,6 +112,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _filterMediaType.value = type
     }
 
+    fun clearPreview() {
+        _videoPreview.value = null
+    }
+
     fun checkAndInitiateDownload(context: Context) {
         val url = _urlInput.value.trim()
         if (url.isEmpty()) {
@@ -119,23 +129,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Fetch format profiles for resolution/bitrate selection
-        viewModelScope.launch {
+        // Fetch format profiles for resolution/bitrate selection using real YoutubeDL engine
+        viewModelScope.launch(Dispatchers.IO) {
             _isLoadingFormats.value = true
             try {
-                val metadata = downloadEngine.fetchFormats(url)
+                val metadata = repository.fetchVideoInfo(url)
+                _videoPreview.value = metadata
                 _formatDialogMetadata.value = metadata
             } catch (e: Exception) {
-                // Fallback
-                _formatDialogMetadata.value = VideoMetadata(
-                    title = "StreamClean Media",
-                    duration = "03:45",
-                    thumbnailUrl = null,
-                    formats = listOf(
-                        VideoFormatInfo("720p", "720p (HD - Default)", "Standard quality", "mp4", "~35 MB"),
-                        VideoFormatInfo("1080p", "1080p (Full HD)", "High quality", "mp4", "~70 MB")
-                    )
-                )
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        "Failed to fetch video info. Please check the URL.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             } finally {
                 _isLoadingFormats.value = false
             }
@@ -147,24 +155,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun confirmDownload(format: VideoFormatInfo) {
-        val metadata = _formatDialogMetadata.value ?: return
+        val metadata = _formatDialogMetadata.value ?: _videoPreview.value ?: return
         val url = _urlInput.value.trim().ifEmpty { "https://example.com/video" }
         val isAudio = _selectedFormatTab.value == "MP3 Audio"
         val mediaType = if (isAudio) "AUDIO" else "VIDEO"
         val extension = if (isAudio) "mp3" else "mp4"
         val title = metadata.title.ifEmpty { "StreamClean Download" }
-        val fileName = "${title.replace(" ", "_")}.$extension"
+        val fileName = "${title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}.$extension"
 
         _formatDialogMetadata.value = null
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val entity = DownloadEntity(
                 url = url,
                 title = title,
                 fileName = fileName,
                 filePath = "",
                 fileSizeBytes = 0L,
-                formattedSize = format.filesizeApprox.ifEmpty { "42.8 MB" },
+                formattedSize = format.filesizeApprox.ifEmpty { "Calculating..." },
                 duration = metadata.duration,
                 thumbnailUri = metadata.thumbnailUrl,
                 mediaType = mediaType,
@@ -176,17 +184,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             val id = repository.insertDownload(entity)
 
-            // Start foreground service
-            DownloadService.start(getApplication())
+            // Start foreground service on main thread
+            withContext(Dispatchers.Main) {
+                DownloadService.start(getApplication())
+            }
 
-            // Enqueue to single-task engine
+            // Enqueue to engine with real format ID and parameters
             downloadEngine.enqueueDownload(
                 entityId = id,
                 url = url,
                 title = title,
                 mediaType = mediaType,
                 resolution = format.resolution,
-                audioBitrate = "192kbps",
+                formatId = format.formatId,
+                audioBitrate = if (isAudio) format.formatId else "192kbps",
+                thumbnailUrl = metadata.thumbnailUrl,
+                duration = metadata.duration,
                 repository = repository
             )
         }
