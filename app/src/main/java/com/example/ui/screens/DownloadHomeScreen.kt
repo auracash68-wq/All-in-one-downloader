@@ -45,10 +45,12 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,7 +87,24 @@ fun DownloadHomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val urlInput by viewModel.urlInput.collectAsState()
+
+    // Pre-filled test URL for emulator testing only (without ?si= parameter)
+    var urlInput by rememberSaveable { mutableStateOf("https://youtu.be/ZxEArqHRAFI") }
+
+    // Synchronize initial prefilled URL with ViewModel so it is immediately functional for download
+    LaunchedEffect(urlInput) {
+        if (viewModel.urlInput.value != urlInput) {
+            viewModel.onUrlChanged(urlInput)
+        }
+    }
+
+    val vmUrl by viewModel.urlInput.collectAsState()
+    LaunchedEffect(vmUrl) {
+        if (vmUrl.isNotEmpty() && vmUrl != urlInput) {
+            urlInput = vmUrl
+        }
+    }
+
     val selectedFormatTab by viewModel.selectedFormatTab.collectAsState()
     val activeDownload by viewModel.activeDownload.collectAsState()
     val videoPreview by viewModel.videoPreview.collectAsState()
@@ -157,7 +176,10 @@ fun DownloadHomeScreen(
                         }
                         BasicTextField(
                             value = urlInput,
-                            onValueChange = { viewModel.onUrlChanged(it) },
+                            onValueChange = {
+                                urlInput = it
+                                viewModel.onUrlChanged(it)
+                            },
                             singleLine = true,
                             textStyle = TextStyle(
                                 color = TextPrimary,

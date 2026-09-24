@@ -9,9 +9,6 @@ import android.util.Log
 import com.example.data.local.AppDatabase
 import com.example.data.preferences.SettingsManager
 import com.example.data.repository.DownloadRepository
-import com.yausername.aria2c.Aria2c
-import com.yausername.ffmpeg.FFmpeg
-import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -41,34 +38,8 @@ class StreamCleanApplication : Application() {
             repository.checkAndSeedInitialData()
         }
 
-        // Initialize YoutubeDL, FFmpeg and Aria2c engine
-        initializeEngines()
-
         // Create Notification Channel for downloads
         createNotificationChannel()
-    }
-
-    private fun initializeEngines() {
-        try {
-            YoutubeDL.getInstance().init(this)
-            Log.d(TAG, "YoutubeDL initialized successfully")
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to initialize YoutubeDL: ${e.message}", e)
-        }
-
-        try {
-            FFmpeg.getInstance().init(this)
-            Log.d(TAG, "FFmpeg initialized successfully")
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to initialize FFmpeg: ${e.message}", e)
-        }
-
-        try {
-            Aria2c.getInstance().init(this)
-            Log.d(TAG, "Aria2c initialized successfully")
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to initialize Aria2c: ${e.message}", e)
-        }
     }
 
     private fun createNotificationChannel() {

@@ -106,11 +106,17 @@ fun VideoPlayerScreen(
             } else if (video.url.isNotEmpty() && (video.url.startsWith("http://") || video.url.startsWith("https://"))) {
                 MediaItem.fromUri(Uri.parse(video.url))
             } else {
-                // Demo stream for preview
-                MediaItem.fromUri("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")
+                null
             }
-            setMediaItem(mediaItem)
-            prepare()
+            if (mediaItem != null) {
+                setMediaItem(mediaItem)
+                prepare()
+            }
+            addListener(object : Player.Listener {
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    android.util.Log.e("VideoPlayerScreen", "ExoPlayer error on primary media: ${error.message}")
+                }
+            })
         }
     }
 

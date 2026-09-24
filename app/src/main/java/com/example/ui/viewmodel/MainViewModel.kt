@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -38,7 +40,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentTab = MutableStateFlow(StreamCleanTab.DOWNLOAD)
     val currentTab: StateFlow<StreamCleanTab> = _currentTab.asStateFlow()
 
-    private val _urlInput = MutableStateFlow("")
+    // Search / URL input state (pre-filled for emulator testing without ?si= parameter)
+    private val _urlInput = MutableStateFlow("https://youtu.be/ZxEArqHRAFI")
     val urlInput: StateFlow<String> = _urlInput.asStateFlow()
 
     private val _selectedFormatTab = MutableStateFlow("MP4 Video") // "MP4 Video" or "MP3 Audio"
@@ -117,11 +120,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun checkAndInitiateDownload(context: Context) {
-        val url = _urlInput.value.trim()
-        if (url.isEmpty()) {
+        val rawUrl = _urlInput.value.trim()
+        if (rawUrl.isEmpty()) {
             Toast.makeText(context, "Please enter or paste a video link", Toast.LENGTH_SHORT).show()
             return
         }
+
+        // Sanitize URL before passing to YoutubeDL engine
+        val sanitizedUrl = sanitizeUrl(rawUrl)
+        Log.d(TAG, "Initiating video fetch. Raw: $rawUrl -> Sanitized: $sanitizedUrl")
 
         // Check Wi-Fi only restriction if enabled
         if (wifiOnly.value && !isConnectedToWifi(context)) {
@@ -133,16 +140,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _isLoadingFormats.value = true
             try {
-                val metadata = repository.fetchVideoInfo(url)
+                val metadata = repository.fetchVideoInfo(sanitizedUrl)
+                if (metadata.videoFormats.isEmpty() && metadata.audioFormats.isEmpty()) {
+                    throw IllegalStateException("No compatible media streams found for this link")
+                }
                 _videoPreview.value = metadata
                 _formatDialogMetadata.value = metadata
             } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch video info for URL: $sanitizedUrl", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        "Failed to fetch video info. Please check the URL.",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    val msg = when {
+                        e.message?.contains("Sign in to confirm", ignoreCase = true) == true ->
+                            "This video requires authentication or token verification."
+                        e.message?.contains("Video unavailable", ignoreCase = true) == true ->
+                            "Video is unavailable or private."
+                        else ->
+                            e.localizedMessage ?: "Failed to extract video info. Please check the URL."
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 }
             } finally {
                 _isLoadingFormats.value = false
@@ -156,7 +171,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmDownload(format: VideoFormatInfo) {
         val metadata = _formatDialogMetadata.value ?: _videoPreview.value ?: return
-        val url = _urlInput.value.trim().ifEmpty { "https://example.com/video" }
+        val rawUrl = _urlInput.value.trim().ifEmpty { "https://youtu.be/ZxEArqHRAFI" }
+        val sanitizedUrl = sanitizeUrl(rawUrl)
         val isAudio = _selectedFormatTab.value == "MP3 Audio"
         val mediaType = if (isAudio) "AUDIO" else "VIDEO"
         val extension = if (isAudio) "mp3" else "mp4"
@@ -167,7 +183,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             val entity = DownloadEntity(
-                url = url,
+                url = sanitizedUrl,
                 title = title,
                 fileName = fileName,
                 filePath = "",
@@ -192,7 +208,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Enqueue to engine with real format ID and parameters
             downloadEngine.enqueueDownload(
                 entityId = id,
-                url = url,
+                url = sanitizedUrl,
                 title = title,
                 mediaType = mediaType,
                 resolution = format.resolution,
@@ -224,6 +240,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playVideo(item: DownloadEntity) {
+        if (item.filePath.isNotEmpty()) {
+            val file = java.io.File(item.filePath)
+            if (!file.exists() || file.length() <= 0) {
+                Toast.makeText(getApplication(), "Media file not found or empty on storage", Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
         _playingVideo.value = item
     }
 
@@ -265,5 +288,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+    }
+
+    companion object {
+        private const val TAG = "DownloadViewModel"
+
+        /**
+         * Sanitizes URLs before passing to yt-dlp by stripping ONLY the specific tracking
+         * parameter 'si' if present, preserving video IDs, timestamps, playlists, and all other parameters.
+         */
+        fun sanitizeUrl(url: String): String {
+            val trimmed = url.trim()
+            if (trimmed.isEmpty()) return ""
+            return try {
+                val uri = Uri.parse(trimmed)
+                if (uri.scheme == null || !uri.isHierarchical) {
+                    return trimmed
+                }
+                val queryNames = uri.queryParameterNames
+                if (!queryNames.contains("si")) {
+                    return trimmed
+                }
+                val builder = uri.buildUpon().clearQuery()
+                for (param in queryNames) {
+                    if (param != "si") {
+                        val values = uri.getQueryParameters(param)
+                        for (v in values) {
+                            builder.appendQueryParameter(param, v)
+                        }
+                    }
+                }
+                val cleaned = builder.build().toString()
+                Log.d(TAG, "URL Sanitization: '$trimmed' -> '$cleaned'")
+                cleaned
+            } catch (e: Exception) {
+                trimmed
+            }
+        }
     }
 }

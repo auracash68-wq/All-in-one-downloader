@@ -28,8 +28,15 @@ class DownloadRepository(
     val activeDownloads: Flow<List<DownloadEntity>> = downloadDao.getActiveDownloads()
 
     suspend fun fetchVideoInfo(url: String): VideoMetadata = withContext(Dispatchers.IO) {
-        val engine = DownloadEngine.getInstance(context)
-        engine.fetchFormats(url)
+        val sanitized = url.substringBefore("?si=").substringBefore("&si=").trim()
+        Log.d("DownloadRepository", "fetchVideoInfo requested for sanitized URL: $sanitized (original: $url)")
+        try {
+            val engine = DownloadEngine.getInstance(context)
+            engine.fetchFormats(sanitized)
+        } catch (e: Throwable) {
+            Log.e("DownloadRepository", "Error fetching video info for URL: $sanitized with full stack trace:", e)
+            throw e
+        }
     }
 
     suspend fun getDownloadById(id: Long): DownloadEntity? = withContext(Dispatchers.IO) {
@@ -61,9 +68,9 @@ class DownloadRepository(
     suspend fun exportToGallery(item: DownloadEntity): Boolean = withContext(Dispatchers.IO) {
         try {
             val sourceFile = File(item.filePath)
-            if (!sourceFile.exists()) {
-                // If demo file without actual path, return true for success simulation
-                return@withContext true
+            if (item.filePath.isEmpty() || !sourceFile.exists() || sourceFile.length() <= 0) {
+                Log.w("DownloadRepository", "Cannot export to gallery: file does not exist or is empty (${item.filePath})")
+                return@withContext false
             }
 
             val isVideo = item.mediaType == "VIDEO"

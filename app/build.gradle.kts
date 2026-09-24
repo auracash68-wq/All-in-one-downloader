@@ -14,8 +14,8 @@ android {
     applicationId = "com.aistudio.streamclean.dlapp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "2.4.0"
+    versionCode = 2
+    versionName = "2.4.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     ndk {
@@ -109,9 +109,9 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
-  implementation("io.github.junkfood02.youtubedl-android:library:0.17.4")
-  implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.4")
-  implementation("io.github.junkfood02.youtubedl-android:aria2c:0.17.4")
+  implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+  implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+  // implementation("io.github.junkfood02.youtubedl-android:aria2c:0.18.1")
   implementation("androidx.media3:media3-exoplayer:1.5.1")
   implementation("androidx.media3:media3-ui:1.5.1")
   implementation(libs.converter.moshi)
