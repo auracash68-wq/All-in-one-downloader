@@ -1,5 +1,6 @@
 package com.example.engine
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.Environment
 import android.util.Log
@@ -81,7 +82,9 @@ data class ActiveDownloadState(
     val duration: String = "",
     val formattedSize: String = "",
     val filePath: String = "",
-    val mediaType: String = "VIDEO"
+    val mediaType: String = "VIDEO",
+    val queueIndex: Int = 0,
+    val queueTotal: Int = 0
 )
 
 class DownloadEngine private constructor(private val context: Context) {
@@ -99,6 +102,8 @@ class DownloadEngine private constructor(private val context: Context) {
     private val initMutex = Mutex()
     @Volatile
     private var isEngineInitialized = false
+
+    private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
 
     private suspend fun ensureEngineInitialized() = withContext(Dispatchers.IO) {
         if (isEngineInitialized) return@withContext
@@ -131,6 +136,8 @@ class DownloadEngine private constructor(private val context: Context) {
         val audioBitrate: String,
         val thumbnailUrl: String?,
         val duration: String,
+        val queueIndex: Int = 0,
+        val queueTotal: Int = 0,
         val repository: DownloadRepository
     )
 
@@ -142,6 +149,16 @@ class DownloadEngine private constructor(private val context: Context) {
                 }
             }
         }
+    }
+
+    /**
+     * Check if device is under critical memory pressure (Feature 3)
+     */
+    fun isMemoryCriticallyLow(): Boolean {
+        val am = activityManager ?: return false
+        val memoryInfo = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(memoryInfo)
+        return memoryInfo.lowMemory || memoryInfo.availMem < (250L * 1024 * 1024)
     }
 
     suspend fun fetchFormats(url: String): VideoMetadata = withContext(Dispatchers.IO) {
@@ -292,6 +309,8 @@ class DownloadEngine private constructor(private val context: Context) {
         audioBitrate: String = "192kbps",
         thumbnailUrl: String? = null,
         duration: String = "",
+        queueIndex: Int = 0,
+        queueTotal: Int = 0,
         repository: DownloadRepository
     ) {
         val task = DownloadTask(
@@ -304,6 +323,8 @@ class DownloadEngine private constructor(private val context: Context) {
             audioBitrate = audioBitrate,
             thumbnailUrl = thumbnailUrl,
             duration = duration,
+            queueIndex = queueIndex,
+            queueTotal = queueTotal,
             repository = repository
         )
         downloadChannel.trySend(task)
@@ -333,7 +354,9 @@ class DownloadEngine private constructor(private val context: Context) {
             isCompleted = false,
             thumbnailUrl = localThumbPath ?: task.thumbnailUrl,
             duration = task.duration,
-            mediaType = task.mediaType
+            mediaType = task.mediaType,
+            queueIndex = task.queueIndex,
+            queueTotal = task.queueTotal
         )
 
         try {
@@ -380,6 +403,10 @@ class DownloadEngine private constructor(private val context: Context) {
                             } else if (fmt.contains("p")) {
                                 val h = fmt.replace("p", "").replace(" HDR", "").trim()
                                 "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best"
+                            } else if (fmt == "HIGH") {
+                                "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+                            } else if (fmt == "LOW") {
+                                "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
                             } else {
                                 "$fmt+bestaudio/best"
                             }
@@ -464,7 +491,9 @@ class DownloadEngine private constructor(private val context: Context) {
                     duration = task.duration,
                     formattedSize = formattedSize,
                     filePath = actualFile.absolutePath,
-                    mediaType = task.mediaType
+                    mediaType = task.mediaType,
+                    queueIndex = task.queueIndex,
+                    queueTotal = task.queueTotal
                 )
             } else {
                 Log.e(TAG, "Output validation failed for ${task.title}. Marking as FAILED.")
@@ -520,7 +549,9 @@ class DownloadEngine private constructor(private val context: Context) {
             errorMessage = errorReason,
             thumbnailUrl = task.thumbnailUrl,
             duration = task.duration,
-            mediaType = task.mediaType
+            mediaType = task.mediaType,
+            queueIndex = task.queueIndex,
+            queueTotal = task.queueTotal
         )
         Log.w(TAG, "Task marked as FAILED for ${task.title}: $errorReason")
     }

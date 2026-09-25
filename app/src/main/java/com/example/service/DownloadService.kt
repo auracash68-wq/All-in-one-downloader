@@ -31,15 +31,20 @@ class DownloadService : Service() {
 
         serviceScope.launch {
             downloadEngine.activeDownload.collectLatest { state ->
+                val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                 if (state != null && state.isRunning) {
+                    val prefix = if (state.queueTotal > 1) "[${state.queueIndex}/${state.queueTotal}] " else ""
                     val notif = buildNotification(
-                        title = state.title.ifEmpty { state.fileName },
+                        title = "$prefix${state.title.ifEmpty { state.fileName }}",
                         progress = state.progress,
                         isIndeterminate = false,
                         speed = state.speed
                     )
-                    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                     manager.notify(NOTIFICATION_ID, notif)
+                } else if (state != null && state.isCompleted && state.queueTotal > 1 && state.queueIndex == state.queueTotal) {
+                    // Feature 10: Multiple Download Success Notification
+                    val batchSuccessNotif = buildBatchSuccessNotification(state.queueTotal)
+                    manager.notify(BATCH_NOTIFICATION_ID, batchSuccessNotif)
                 } else if (state == null) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -110,9 +115,29 @@ class DownloadService : Service() {
             .build()
     }
 
+    private fun buildBatchSuccessNotification(totalCount: Int): Notification {
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            this, 2, openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, StreamCleanApplication.CHANNEL_ID)
+            .setContentTitle("✓ Multiple downloads successful")
+            .setContentText("All $totalCount selected downloads have completed successfully.")
+            .setSmallIcon(R.drawable.ic_streamclean_logo)
+            .setAutoCancel(true)
+            .setContentIntent(openPendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+    }
+
     companion object {
         private const val TAG = "DownloadService"
         const val NOTIFICATION_ID = 1001
+        const val BATCH_NOTIFICATION_ID = 1002
         const val ACTION_CANCEL = "com.example.service.ACTION_CANCEL"
 
         fun start(context: Context) {

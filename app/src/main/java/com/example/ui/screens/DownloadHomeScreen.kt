@@ -10,9 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,8 +25,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.ContentPaste
@@ -34,6 +37,8 @@ import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.PlaylistAdd
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -59,6 +64,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -94,6 +100,14 @@ fun DownloadHomeScreen(
     val formatDialogMetadata by viewModel.formatDialogMetadata.collectAsState()
     val isLoadingFormats by viewModel.isLoadingFormats.collectAsState()
 
+    // Real-time RAM & Network Speed (Features 1 & 2)
+    val ramState by viewModel.ramState.collectAsState()
+    val networkSpeedState by viewModel.networkSpeedState.collectAsState()
+
+    // Dialog states (Features 3, 4, 5, 6, 7)
+    val showMultipleUrlDialog by viewModel.showMultipleUrlDialog.collectAsState()
+    val showLowMemoryDialog by viewModel.showLowMemoryDialog.collectAsState()
+
     val scrollState = rememberScrollState()
 
     Box(
@@ -120,8 +134,66 @@ fun DownloadHomeScreen(
                 text = "Paste a video link to download",
                 fontSize = 14.sp,
                 color = TextSecondary,
-                modifier = Modifier.padding(bottom = 36.dp)
+                modifier = Modifier.padding(bottom = 12.dp)
             )
+
+            // Features 1 & 2: Real-time RAM & Internet Speed Indicators
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // RAM Status Card
+                Card(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardSurface),
+                    border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(ramState.statusLevel.color)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(text = "RAM", fontSize = 11.sp, color = TextSecondary, fontWeight = FontWeight.Medium)
+                            Text(text = ramState.displayText, fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        }
+                    }
+                }
+
+                // Internet Speed Status Card
+                Card(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardSurface),
+                    border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(networkSpeedState.statusLevel.color)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(text = "Internet Speed", fontSize = 11.sp, color = TextSecondary, fontWeight = FontWeight.Medium)
+                            Text(text = networkSpeedState.displayText, fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        }
+                    }
+                }
+            }
 
             // URL Input Card
             Box(
@@ -198,7 +270,39 @@ fun DownloadHomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            // Feature 4: "Paste Multiple Link" button
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MintGreenLight)
+                        .clickable { viewModel.openMultipleUrlDialog() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .testTag("paste_multiple_link_button"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.PlaylistAdd,
+                        contentDescription = "Paste Multiple Link",
+                        tint = MintGreenPillDarkText,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = "Paste Multiple Link",
+                        color = MintGreenPillDarkText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Format Selection Pill Container (MP4 Video / MP3 Audio)
             Box(
@@ -452,10 +556,13 @@ fun DownloadHomeScreen(
                                     }
                                     isDownloading -> {
                                         val spd = activeDownload?.speed.orEmpty()
+                                        val queueInfo = if ((activeDownload?.queueTotal ?: 0) > 1) {
+                                            "Queue ${activeDownload?.queueIndex}/${activeDownload?.queueTotal} • "
+                                        } else ""
                                         val statusStr = if (spd.isNotEmpty()) {
-                                            "Downloading • $progressInt% ($spd)"
+                                            "${queueInfo}Downloading • $progressInt% ($spd)"
                                         } else {
-                                            "Downloading • $progressInt%"
+                                            "${queueInfo}Downloading • $progressInt%"
                                         }
                                         Text(
                                             text = statusStr,
@@ -559,7 +666,7 @@ fun DownloadHomeScreen(
             }
         }
 
-        // Quality Selection Dialog (Strictly real formats 144p to 720p or audio bitrates)
+        // Single Download Quality Selection Dialog
         formatDialogMetadata?.let { metadata ->
             FormatSelectionDialog(
                 metadata = metadata,
@@ -570,7 +677,354 @@ fun DownloadHomeScreen(
                 }
             )
         }
+
+        // Features 4, 5, 6, 7: Multiple URL Dialog
+        if (showMultipleUrlDialog) {
+            MultipleUrlDialog(
+                viewModel = viewModel,
+                onDismiss = { viewModel.closeMultipleUrlDialog() }
+            )
+        }
+
+        // Feature 3: Low Memory Safety Dialog
+        if (showLowMemoryDialog) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissLowMemoryDialog() },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Outlined.WarningAmber,
+                        contentDescription = "Low Memory Warning",
+                        tint = Color(0xFFEF4444),
+                        modifier = Modifier.size(36.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        text = "Low available memory",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = TextPrimary
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Your device currently has limited available memory. For a smoother download, please close unnecessary background apps or select a lower video quality.",
+                        fontSize = 14.sp,
+                        color = TextSecondary,
+                        lineHeight = 20.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { viewModel.chooseLowerQualityFromWarning() },
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Choose Lower Quality", color = Color.White)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.continueDownloadDespiteMemoryWarning() }) {
+                        Text("Continue Anyway", color = TextSecondary)
+                    }
+                },
+                shape = RoundedCornerShape(16.dp),
+                containerColor = CardSurface
+            )
+        }
     }
+}
+
+/**
+ * Features 5, 6, 7: Multiple URL Dialog
+ */
+@Composable
+fun MultipleUrlDialog(
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val urls by viewModel.multipleUrls.collectAsState()
+    val formatType by viewModel.multipleFormatType.collectAsState()
+    val qualityPreset by viewModel.multipleQualityPreset.collectAsState()
+    val duplicateIndices = remember(urls) { viewModel.getDuplicateIndices() }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Paste Multiple Links",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = TextPrimary
+                )
+                Text(
+                    text = "${urls.size}/12 links",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Add between 2 and 12 video or audio links to download sequentially in the background.",
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(bottom = 14.dp)
+                )
+
+                // Format Selector inside Dialog (Video / Audio)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFFEBF1EB))
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val isVideo = formatType == "MP4 Video"
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isVideo) PrimaryGreenDark else Color.Transparent)
+                            .clickable { viewModel.setMultipleFormatType("MP4 Video") }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "MP4 Video",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isVideo) Color.White else TextPrimary
+                        )
+                    }
+
+                    val isAudio = formatType == "MP3 Audio"
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isAudio) PrimaryGreenDark else Color.Transparent)
+                            .clickable { viewModel.setMultipleFormatType("MP3 Audio") }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "MP3 Audio",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isAudio) Color.White else TextPrimary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Quality Selector (Feature 7)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val highLabel = if (formatType == "MP4 Video") "High (720p max)" else "High Quality"
+                    val lowLabel = if (formatType == "MP4 Video") "Low (144p - 360p)" else "Standard Quality"
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(
+                                1.dp,
+                                if (qualityPreset == "HIGH") PrimaryGreen else CardBorder,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { viewModel.setMultipleQualityPreset("HIGH") }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = qualityPreset == "HIGH",
+                            onClick = { viewModel.setMultipleQualityPreset("HIGH") },
+                            colors = RadioButtonDefaults.colors(selectedColor = PrimaryGreen),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = highLabel, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Medium)
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(
+                                1.dp,
+                                if (qualityPreset == "LOW") PrimaryGreen else CardBorder,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { viewModel.setMultipleQualityPreset("LOW") }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = qualityPreset == "LOW",
+                            onClick = { viewModel.setMultipleQualityPreset("LOW") },
+                            colors = RadioButtonDefaults.colors(selectedColor = PrimaryGreen),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = lowLabel, fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.Medium)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // URL Input Rows (Min 2, Max 12)
+                urls.forEachIndexed { index, urlText ->
+                    val isDuplicate = duplicateIndices.contains(index)
+                    Column(modifier = Modifier.padding(bottom = 10.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFF6F8F6))
+                                .border(
+                                    1.dp,
+                                    if (isDuplicate) Color(0xFFEF4444) else CardBorder,
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${index + 1}.",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextSecondary,
+                                modifier = Modifier.width(22.dp)
+                            )
+
+                            BasicTextField(
+                                value = urlText,
+                                onValueChange = { viewModel.updateMultipleUrl(index, it) },
+                                singleLine = true,
+                                textStyle = TextStyle(
+                                    color = TextPrimary,
+                                    fontSize = 13.sp
+                                ),
+                                cursorBrush = SolidColor(PrimaryGreen),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("multiple_url_input_$index")
+                            )
+
+                            if (urlText.isEmpty()) {
+                                IconButton(
+                                    onClick = {
+                                        val clip = clipboardManager.getText()?.text
+                                        if (!clip.isNullOrBlank()) {
+                                            viewModel.updateMultipleUrl(index, clip.trim())
+                                        }
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.ContentPaste,
+                                        contentDescription = "Paste",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            if (urls.size > 2) {
+                                IconButton(
+                                    onClick = { viewModel.removeMultipleUrlRow(index) },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.DeleteOutline,
+                                        contentDescription = "Remove",
+                                        tint = Color(0xFFDC2626),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        if (isDuplicate) {
+                            Text(
+                                text = "Duplicate URL detected",
+                                color = Color(0xFFEF4444),
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(start = 26.dp, top = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Add Link Button (if count < 12)
+                if (urls.size < 12) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { viewModel.addMultipleUrlRow() }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Link",
+                            tint = PrimaryGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Add another link",
+                            color = PrimaryGreen,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val hasMinUrls = urls.count { it.isNotBlank() } >= 2
+            val hasDuplicates = duplicateIndices.isNotEmpty()
+            Button(
+                onClick = { viewModel.confirmMultipleDownload(context) },
+                enabled = hasMinUrls && !hasDuplicates,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PrimaryGreen,
+                    disabledContainerColor = Color(0xFFD1D5DB)
+                ),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Continue Download", color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+        shape = RoundedCornerShape(16.dp),
+        containerColor = CardSurface
+    )
 }
 
 @Composable

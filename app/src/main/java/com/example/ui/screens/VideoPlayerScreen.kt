@@ -138,6 +138,39 @@ fun VideoPlayerScreen(
         }
     }
 
+    // Handle screen keep-awake for VIDEO playback (Feature 11)
+    val isVideo = video.mediaType != "AUDIO"
+    val window = activity?.window
+    LaunchedEffect(isPlaying, isVideo) {
+        if (isVideo && isPlaying) {
+            window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // Lifecycle observer for video pausing on app exit / audio background playback (Features 12 & 13)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, isVideo) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (isVideo) {
+                // Pause video playback when leaving app
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE ||
+                    event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                    if (exoPlayer.isPlaying) {
+                        exoPlayer.pause()
+                        isPlaying = false
+                    }
+                }
+            }
+            // For AUDIO: do not pause on ON_PAUSE / ON_STOP, allow audio background playback
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     // Handle back button
     BackHandler {
         if (isFullscreen) {
@@ -148,9 +181,10 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Release player on exit
+    // Release player on exit and clear keep-screen-on
     DisposableEffect(Unit) {
         onDispose {
+            window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             exoPlayer.release()
         }
