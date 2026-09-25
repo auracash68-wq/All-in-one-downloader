@@ -117,6 +117,15 @@ class DownloadEngine private constructor(private val context: Context) {
                 } catch (t: Throwable) {
                     Log.w(TAG, "FFmpeg initialization notice: ${t.message}")
                 }
+
+                try {
+                    Log.i(TAG, "Updating yt-dlp executable to latest stable release...")
+                    val status = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext, YoutubeDL.UpdateChannel.STABLE)
+                    Log.i(TAG, "yt-dlp update status: $status")
+                } catch (ut: Throwable) {
+                    Log.w(TAG, "yt-dlp update attempt notice: ${ut.message}")
+                }
+
                 isEngineInitialized = true
                 Log.i(TAG, "YoutubeDL and FFmpeg initialized successfully")
             } catch (e: Throwable) {
@@ -180,6 +189,13 @@ class DownloadEngine private constructor(private val context: Context) {
             addOption("--no-warnings")
             addOption("--no-update")
             addOption("--no-check-certificates")
+            if (isDailymotionUrl(sanitized)) {
+                addOption("--referer", "https://www.dailymotion.com/")
+                addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+            } else if (isBilibiliUrl(sanitized)) {
+                addOption("--referer", "https://www.bilibili.com/")
+                addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+            }
         }
 
         val videoInfo: VideoInfo = try {
@@ -228,6 +244,14 @@ class DownloadEngine private constructor(private val context: Context) {
 
     private fun isYouTubeUrl(url: String): Boolean {
         return url.contains("youtu.be", ignoreCase = true) || url.contains("youtube.com", ignoreCase = true)
+    }
+
+    private fun isDailymotionUrl(url: String): Boolean {
+        return url.contains("dailymotion.com", ignoreCase = true) || url.contains("dai.ly", ignoreCase = true)
+    }
+
+    private fun isBilibiliUrl(url: String): Boolean {
+        return url.contains("bilibili.com", ignoreCase = true) || url.contains("b23.tv", ignoreCase = true)
     }
 
     private fun fetchOEmbedSupplemental(url: String): Pair<String, String>? {
@@ -381,8 +405,16 @@ class DownloadEngine private constructor(private val context: Context) {
                     addOption("--no-warnings")
                     addOption("--no-update")
                     addOption("--no-check-certificates")
-                    // Concurrency optimization for high download speed without server throttling
-                    addOption("-N", "4")
+                    if (isDailymotionUrl(sanitizedUrl)) {
+                        addOption("--referer", "https://www.dailymotion.com/")
+                        addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                    } else if (isBilibiliUrl(sanitizedUrl)) {
+                        addOption("--referer", "https://www.bilibili.com/")
+                        addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                    } else {
+                        // Concurrency optimization for high download speed without server throttling
+                        addOption("-N", "4")
+                    }
                     addOption("--buffer-size", "64k")
                     addOption("--retries", "3")
                     addOption("--socket-timeout", "15")
