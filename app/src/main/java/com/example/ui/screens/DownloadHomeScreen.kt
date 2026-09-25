@@ -4,7 +4,6 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,7 +25,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Link
@@ -45,12 +48,10 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,19 +61,18 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.R
+import com.example.data.local.DownloadEntity
 import com.example.engine.VideoFormatInfo
+import com.example.engine.VideoMetadata
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.MintGreenLight
-import com.example.ui.theme.MintGreenPill
 import com.example.ui.theme.MintGreenPillDarkText
 import com.example.ui.theme.PrimaryGreen
 import com.example.ui.theme.PrimaryGreenDark
@@ -87,32 +87,12 @@ fun DownloadHomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-
-    // Pre-filled test URL for emulator testing only (without ?si= parameter)
-    var urlInput by rememberSaveable { mutableStateOf("https://youtu.be/ZxEArqHRAFI") }
-
-    // Synchronize initial prefilled URL with ViewModel so it is immediately functional for download
-    LaunchedEffect(urlInput) {
-        if (viewModel.urlInput.value != urlInput) {
-            viewModel.onUrlChanged(urlInput)
-        }
-    }
-
-    val vmUrl by viewModel.urlInput.collectAsState()
-    LaunchedEffect(vmUrl) {
-        if (vmUrl.isNotEmpty() && vmUrl != urlInput) {
-            urlInput = vmUrl
-        }
-    }
-
+    val urlInput by viewModel.urlInput.collectAsState()
     val selectedFormatTab by viewModel.selectedFormatTab.collectAsState()
     val activeDownload by viewModel.activeDownload.collectAsState()
     val videoPreview by viewModel.videoPreview.collectAsState()
     val formatDialogMetadata by viewModel.formatDialogMetadata.collectAsState()
     val isLoadingFormats by viewModel.isLoadingFormats.collectAsState()
-
-    // Flag for initial demo active card matching Image 4
-    var showMockActiveDownload by remember { mutableStateOf(true) }
 
     val scrollState = rememberScrollState()
 
@@ -140,7 +120,7 @@ fun DownloadHomeScreen(
                 text = "Paste a video link to download",
                 fontSize = 14.sp,
                 color = TextSecondary,
-                modifier = Modifier.padding(bottom = 24.dp)
+                modifier = Modifier.padding(bottom = 36.dp)
             )
 
             // URL Input Card
@@ -176,10 +156,7 @@ fun DownloadHomeScreen(
                         }
                         BasicTextField(
                             value = urlInput,
-                            onValueChange = {
-                                urlInput = it
-                                viewModel.onUrlChanged(it)
-                            },
+                            onValueChange = { viewModel.onUrlChanged(it) },
                             singleLine = true,
                             textStyle = TextStyle(
                                 color = TextPrimary,
@@ -298,9 +275,7 @@ fun DownloadHomeScreen(
             // Large Download Button
             Button(
                 onClick = { viewModel.checkAndInitiateDownload(context) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PrimaryGreen
-                ),
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -337,51 +312,39 @@ fun DownloadHomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // Active Download Card (Matching Image 4)
-            // Displays real download state if active, real fetched preview, or initial mockup demo matching Image 4
+            // Real Active Download / Preview / Completed Success Card
             val isDownloading = activeDownload != null && activeDownload!!.isRunning
-            val preview = videoPreview
-            val hasActiveCard = isDownloading || preview != null || showMockActiveDownload
+            val isCompleted = activeDownload != null && activeDownload!!.isCompleted
+            val isFailed = activeDownload != null && activeDownload!!.isFailed
+            val hasPreview = videoPreview != null && activeDownload == null
 
             AnimatedVisibility(
-                visible = hasActiveCard,
+                visible = isDownloading || isCompleted || isFailed || hasPreview,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                val filename = when {
-                    isDownloading -> activeDownload?.title?.ifEmpty { activeDownload?.fileName } ?: "downloading_video.mp4"
-                    preview != null -> preview.title
-                    else -> "nature_documentary_4k.mp4"
+                val currentTitle = when {
+                    activeDownload != null -> activeDownload!!.title.ifEmpty { activeDownload!!.fileName }
+                    videoPreview != null -> videoPreview!!.title
+                    else -> ""
                 }
 
                 val currentThumb = when {
-                    isDownloading -> activeDownload?.thumbnailUrl
-                    preview != null -> preview.thumbnailUrl
+                    activeDownload != null -> activeDownload!!.thumbnailUrl
+                    videoPreview != null -> videoPreview!!.thumbnailUrl
                     else -> null
                 }
 
-                val progressInt = if (isDownloading) {
-                    activeDownload?.progress ?: 0
-                } else {
-                    42
+                val currentDuration = when {
+                    activeDownload != null -> activeDownload!!.duration
+                    videoPreview != null -> videoPreview!!.duration
+                    else -> ""
                 }
 
+                val progressInt = activeDownload?.progress ?: 0
                 val progressFloat = progressInt / 100f
-
-                val statusText = when {
-                    isDownloading -> {
-                        val speed = activeDownload?.speed.orEmpty()
-                        if (speed.isNotEmpty() && speed != "Starting...") {
-                            "Downloading • $progressInt% ($speed)"
-                        } else {
-                            "Downloading • $progressInt%"
-                        }
-                    }
-                    preview != null -> "Ready to download • ${preview.duration}"
-                    else -> "Downloading • 42%"
-                }
 
                 Card(
                     shape = RoundedCornerShape(16.dp),
@@ -397,73 +360,190 @@ fun DownloadHomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            // Thumbnail (Real thumbnail via Coil AsyncImage or default fallback)
-                            if (!currentThumb.isNullOrEmpty()) {
-                                AsyncImage(
-                                    model = currentThumb,
-                                    contentDescription = "Video Thumbnail",
-                                    contentScale = ContentScale.Crop,
-                                    placeholder = painterResource(id = R.drawable.thumb_nature),
-                                    error = painterResource(id = R.drawable.thumb_nature),
-                                    modifier = Modifier
-                                        .size(54.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                )
-                            } else {
-                                Image(
-                                    painter = painterResource(id = R.drawable.thumb_nature),
-                                    contentDescription = "Video Thumbnail",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(54.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                )
+                            // Large Original Thumbnail (16:9 / clear fit with duration badge)
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 84.dp, height = 58.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF222222)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (!currentThumb.isNullOrEmpty()) {
+                                    AsyncImage(
+                                        model = currentThumb,
+                                        contentDescription = "Original Thumbnail",
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = if (selectedFormatTab == "MP3 Audio") Icons.Outlined.MusicNote else Icons.Outlined.Movie,
+                                        contentDescription = "Media Icon",
+                                        tint = Color.White.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+
+                                if (currentDuration.isNotEmpty()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(3.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color.Black.copy(alpha = 0.8f))
+                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = currentDuration,
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
                             }
 
                             Spacer(modifier = Modifier.width(14.dp))
 
-                            // Filename & Status
+                            // Filename & Status Info
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = filename,
+                                    text = currentTitle,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = TextPrimary,
                                     maxLines = 1
                                 )
-                                Spacer(modifier = Modifier.height(3.dp))
-                                Text(
-                                    text = statusText,
-                                    fontSize = 13.sp,
-                                    color = TextSecondary
-                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                when {
+                                    isCompleted -> {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Filled.CheckCircle,
+                                                contentDescription = "Completed",
+                                                tint = PrimaryGreen,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "Download complete • ${activeDownload?.formattedSize}",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = PrimaryGreen
+                                            )
+                                        }
+                                    }
+                                    isFailed -> {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Filled.ErrorOutline,
+                                                contentDescription = "Failed",
+                                                tint = Color(0xFFDC2626),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "Download failed",
+                                                fontSize = 13.sp,
+                                                color = Color(0xFFDC2626)
+                                            )
+                                        }
+                                    }
+                                    isDownloading -> {
+                                        val spd = activeDownload?.speed.orEmpty()
+                                        val statusStr = if (spd.isNotEmpty()) {
+                                            "Downloading • $progressInt% ($spd)"
+                                        } else {
+                                            "Downloading • $progressInt%"
+                                        }
+                                        Text(
+                                            text = statusStr,
+                                            fontSize = 13.sp,
+                                            color = TextSecondary
+                                        )
+                                    }
+                                    hasPreview -> {
+                                        Text(
+                                            text = "Ready to download • ${videoPreview?.duration}",
+                                            fontSize = 13.sp,
+                                            color = TextSecondary
+                                        )
+                                    }
+                                }
                             }
 
-                            // Close / Cancel (X) button
-                            IconButton(
-                                onClick = {
-                                    if (isDownloading) {
-                                        viewModel.cancelActiveDownload()
-                                    } else {
-                                        viewModel.clearPreview()
-                                        showMockActiveDownload = false
-                                    }
-                                },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Cancel Download",
-                                    tint = TextSecondary,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // Action Button: Play for completed or Close/Cancel (X)
+                            if (isCompleted) {
+                                IconButton(
+                                    onClick = {
+                                        activeDownload?.let { dl ->
+                                            viewModel.playVideo(
+                                                DownloadEntity(
+                                                    id = dl.id,
+                                                    title = dl.title,
+                                                    fileName = dl.fileName,
+                                                    filePath = dl.filePath,
+                                                    thumbnailUri = dl.thumbnailUrl,
+                                                    duration = dl.duration,
+                                                    mediaType = dl.mediaType
+                                                )
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(CircleShape)
+                                        .background(PrimaryGreen)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Play",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = { viewModel.dismissActiveCard() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Dismiss",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            } else {
+                                IconButton(
+                                    onClick = {
+                                        if (isDownloading) {
+                                            viewModel.cancelActiveDownload()
+                                        } else if (isFailed) {
+                                            viewModel.dismissActiveCard()
+                                        } else {
+                                            viewModel.clearPreview()
+                                        }
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Cancel",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
 
-                        if (isDownloading || showMockActiveDownload) {
+                        if (isDownloading) {
                             Spacer(modifier = Modifier.height(14.dp))
 
-                            // Progress Bar (Green indicator, light mint track)
+                            // Real Progress Bar
                             LinearProgressIndicator(
                                 progress = { progressFloat },
                                 modifier = Modifier
@@ -479,7 +559,7 @@ fun DownloadHomeScreen(
             }
         }
 
-        // Quality Selection Dialog (fetching formats dynamically using yt-dlp)
+        // Quality Selection Dialog (Strictly real formats 144p to 720p or audio bitrates)
         formatDialogMetadata?.let { metadata ->
             FormatSelectionDialog(
                 metadata = metadata,
@@ -495,7 +575,7 @@ fun DownloadHomeScreen(
 
 @Composable
 fun FormatSelectionDialog(
-    metadata: com.example.engine.VideoMetadata,
+    metadata: VideoMetadata,
     isAudio: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (VideoFormatInfo) -> Unit
@@ -511,7 +591,7 @@ fun FormatSelectionDialog(
             if (isAudio) {
                 formats.find { it.formatId.contains("192") } ?: formats.firstOrNull() ?: VideoFormatInfo("192kbps", "192 kbps (Standard Quality)", "Recommended • MP3", "mp3", isAudio = true)
             } else {
-                formats.find { it.formatId.contains("720") } ?: formats.firstOrNull() ?: VideoFormatInfo("720p", "720p (HD - Recommended)", ext = "mp4")
+                formats.find { it.resolution.contains("720") } ?: formats.firstOrNull() ?: VideoFormatInfo("720p", "720p (HD)", ext = "mp4")
             }
         )
     }
@@ -538,7 +618,7 @@ fun FormatSelectionDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 formats.forEach { format ->
-                    val isChecked = format.formatId == selectedFormat.formatId
+                    val isChecked = format.formatId == selectedFormat.formatId && format.resolution == selectedFormat.resolution
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -560,9 +640,13 @@ fun FormatSelectionDialog(
                                 fontSize = 14.sp,
                                 color = TextPrimary
                             )
-                            if (format.note.isNotEmpty() || format.filesizeApprox.isNotEmpty()) {
+                            val details = listOfNotNull(
+                                format.note.takeIf { it.isNotBlank() },
+                                format.filesizeApprox.takeIf { it.isNotBlank() }
+                            ).joinToString(" • ")
+                            if (details.isNotEmpty()) {
                                 Text(
-                                    text = "${format.note} • ${format.filesizeApprox}",
+                                    text = details,
                                     fontSize = 12.sp,
                                     color = TextSecondary
                                 )

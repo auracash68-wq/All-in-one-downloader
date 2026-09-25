@@ -2,8 +2,6 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,8 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
@@ -50,11 +46,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
+import coil.compose.AsyncImage
 import com.example.data.local.DownloadEntity
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
@@ -75,7 +70,6 @@ fun DownloadsScreen(
 ) {
     val context = LocalContext.current
     val filteredDownloads by viewModel.filteredDownloads.collectAsState()
-    val allDownloads by viewModel.allDownloads.collectAsState()
     val selectedFilter by viewModel.filterMediaType.collectAsState()
 
     val fileCountText = "${filteredDownloads.size} files"
@@ -106,7 +100,7 @@ fun DownloadsScreen(
                     modifier = Modifier.testTag("downloads_screen_title")
                 )
 
-                // Pill Badge on right e.g. "3 files"
+                // Pill Badge on right e.g. "X files"
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(20.dp))
@@ -255,7 +249,7 @@ fun DownloadsScreen(
                                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                         type = if (download.mediaType == "VIDEO") "video/*" else "audio/*"
                                         putExtra(Intent.EXTRA_SUBJECT, download.title)
-                                        putExtra(Intent.EXTRA_TEXT, "Check out this downloaded video: ${download.fileName}")
+                                        putExtra(Intent.EXTRA_TEXT, "Check out this downloaded media: ${download.fileName}")
                                     }
                                     context.startActivity(Intent.createChooser(shareIntent, "Share with"))
                                 }
@@ -286,14 +280,7 @@ fun DownloadListItemRow(
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-
-    // Match thumbnail to item title or mock id
-    val thumbnailRes = when {
-        item.fileName.contains("Drone", ignoreCase = true) || item.title.contains("Drone", ignoreCase = true) -> R.drawable.thumb_drone
-        item.fileName.contains("Tutorial", ignoreCase = true) || item.title.contains("Tutorial", ignoreCase = true) -> R.drawable.thumb_tutorial
-        item.fileName.contains("Motion", ignoreCase = true) || item.title.contains("Motion", ignoreCase = true) -> R.drawable.thumb_motion
-        else -> R.drawable.thumb_nature
-    }
+    val isAudio = item.mediaType == "AUDIO"
 
     Row(
         modifier = modifier
@@ -303,35 +290,73 @@ fun DownloadListItemRow(
             .testTag("download_row_${item.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Thumbnail with duration overlay badge
-        Box(
-            modifier = Modifier
-                .size(width = 68.dp, height = 48.dp)
-                .clip(RoundedCornerShape(8.dp))
-        ) {
-            Image(
-                painter = painterResource(id = thumbnailRes),
-                contentDescription = item.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // Duration Pill Overlay at bottom right
-            if (item.duration.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(3.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color.Black.copy(alpha = 0.75f))
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = item.duration,
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium
+        if (isAudio) {
+            // Dedicated clean audio card representation
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFE8ECE9)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!item.thumbnailUri.isNullOrEmpty() && item.thumbnailUri.startsWith("http")) {
+                    AsyncImage(
+                        model = item.thumbnailUri,
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
+                } else {
+                    Icon(
+                        imageVector = Icons.Outlined.MusicNote,
+                        contentDescription = "Audio Item",
+                        tint = MintGreenPillDarkText,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        } else {
+            // Real Original Video Thumbnail with duration overlay badge
+            Box(
+                modifier = Modifier
+                    .size(width = 72.dp, height = 50.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF222222)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!item.thumbnailUri.isNullOrEmpty()) {
+                    AsyncImage(
+                        model = item.thumbnailUri,
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Outlined.Videocam,
+                        contentDescription = "Video Item",
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                // Duration Pill Overlay at bottom right
+                if (item.duration.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(3.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.Black.copy(alpha = 0.8f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = item.duration,
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
@@ -348,7 +373,11 @@ fun DownloadListItemRow(
                 maxLines = 1
             )
             Spacer(modifier = Modifier.height(3.dp))
-            val subtitle = "${item.formattedSize} • ${item.relativeDate}"
+            val subtitle = if (item.formattedSize.isNotEmpty()) {
+                "${item.formattedSize} • ${item.relativeDate}"
+            } else {
+                item.relativeDate
+            }
             Text(
                 text = subtitle,
                 fontSize = 13.sp,

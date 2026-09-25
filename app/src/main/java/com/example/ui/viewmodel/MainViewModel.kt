@@ -40,8 +40,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentTab = MutableStateFlow(StreamCleanTab.DOWNLOAD)
     val currentTab: StateFlow<StreamCleanTab> = _currentTab.asStateFlow()
 
-    // Search / URL input state (pre-filled for emulator testing without ?si= parameter)
-    private val _urlInput = MutableStateFlow("https://youtu.be/ZxEArqHRAFI")
+    // Real search / URL input state (starts empty in production)
+    private val _urlInput = MutableStateFlow("")
     val urlInput: StateFlow<String> = _urlInput.asStateFlow()
 
     private val _selectedFormatTab = MutableStateFlow("MP4 Video") // "MP4 Video" or "MP3 Audio"
@@ -67,6 +67,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _videoPreview = MutableStateFlow<VideoMetadata?>(null)
     val videoPreview: StateFlow<VideoMetadata?> = _videoPreview.asStateFlow()
 
+    // Extracted URL matching current cached preview
+    private var lastExtractedUrl: String = ""
+
     // Format selection dialog state
     private val _formatDialogMetadata = MutableStateFlow<VideoMetadata?>(null)
     val formatDialogMetadata: StateFlow<VideoMetadata?> = _formatDialogMetadata.asStateFlow()
@@ -91,6 +94,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onUrlChanged(url: String) {
         _urlInput.value = url
+        if (url != lastExtractedUrl) {
+            _videoPreview.value = null
+        }
     }
 
     fun pasteFromClipboard(context: Context) {
@@ -100,6 +106,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val text = clip.getItemAt(0).text?.toString() ?: ""
             if (text.isNotEmpty()) {
                 _urlInput.value = text.trim()
+                if (text.trim() != lastExtractedUrl) {
+                    _videoPreview.value = null
+                }
                 Toast.makeText(context, "Link pasted!", Toast.LENGTH_SHORT).show()
             }
         } else {
@@ -117,6 +126,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearPreview() {
         _videoPreview.value = null
+        lastExtractedUrl = ""
     }
 
     fun checkAndInitiateDownload(context: Context) {
@@ -136,16 +146,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Reuse already extracted metadata if safe to prevent duplicate network latency
+        val currentPreview = _videoPreview.value
+        if (currentPreview != null && sanitizedUrl == lastExtractedUrl) {
+            handleMetadataResult(currentPreview, context)
+            return
+        }
+
         // Fetch format profiles for resolution/bitrate selection using real YoutubeDL engine
         viewModelScope.launch(Dispatchers.IO) {
             _isLoadingFormats.value = true
             try {
                 val metadata = repository.fetchVideoInfo(sanitizedUrl)
-                if (metadata.videoFormats.isEmpty() && metadata.audioFormats.isEmpty()) {
-                    throw IllegalStateException("No compatible media streams found for this link")
-                }
+                lastExtractedUrl = sanitizedUrl
                 _videoPreview.value = metadata
-                _formatDialogMetadata.value = metadata
+                withContext(Dispatchers.Main) {
+                    handleMetadataResult(metadata, context)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch video info for URL: $sanitizedUrl", e)
                 withContext(Dispatchers.Main) {
@@ -165,13 +182,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun handleMetadataResult(metadata: VideoMetadata, context: Context) {
+        val isAudio = _selectedFormatTab.value == "MP3 Audio"
+        if (!isAudio) {
+            if (metadata.videoFormats.isEmpty()) {
+                // Safety policy requirement: Show clear safety message when no 144p-720p quality exists
+                Toast.makeText(
+                    context,
+                    "Download unavailable for this video.\nFor your device safety, this video does not provide a supported quality between 144p and 720p.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
+        } else {
+            if (metadata.audioFormats.isEmpty() && metadata.videoFormats.isEmpty()) {
+                Toast.makeText(context, "No downloadable audio stream found for this link.", Toast.LENGTH_LONG).show()
+                return
+            }
+        }
+        _formatDialogMetadata.value = metadata
+    }
+
     fun dismissFormatDialog() {
         _formatDialogMetadata.value = null
     }
 
     fun confirmDownload(format: VideoFormatInfo) {
         val metadata = _formatDialogMetadata.value ?: _videoPreview.value ?: return
-        val rawUrl = _urlInput.value.trim().ifEmpty { "https://youtu.be/ZxEArqHRAFI" }
+        val rawUrl = _urlInput.value.trim()
+        if (rawUrl.isEmpty()) return
         val sanitizedUrl = sanitizeUrl(rawUrl)
         val isAudio = _selectedFormatTab.value == "MP3 Audio"
         val mediaType = if (isAudio) "AUDIO" else "VIDEO"
@@ -226,6 +265,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         DownloadService.stop(getApplication())
     }
 
+    fun dismissActiveCard() {
+        downloadEngine.dismissActiveCard()
+    }
+
     fun deleteDownload(item: DownloadEntity) {
         viewModelScope.launch {
             repository.deleteDownload(item)
@@ -260,6 +303,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun downloadFromBrowser(url: String) {
         _urlInput.value = url
+        _videoPreview.value = null
+        lastExtractedUrl = ""
         _currentTab.value = StreamCleanTab.DOWNLOAD
     }
 

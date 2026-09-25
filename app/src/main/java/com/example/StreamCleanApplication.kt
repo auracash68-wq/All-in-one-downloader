@@ -33,11 +33,6 @@ class StreamCleanApplication : Application() {
         repository = DownloadRepository(this, database.downloadDao())
         settingsManager = SettingsManager(this)
 
-        // Seed initial data matching design mockups
-        CoroutineScope(Dispatchers.IO).launch {
-            repository.checkAndSeedInitialData()
-        }
-
         // Create Notification Channel for downloads
         createNotificationChannel()
     }

@@ -56,6 +56,11 @@ fun StreamCleanMainApp(
     val currentTab by viewModel.currentTab.collectAsState()
     val playingVideo by viewModel.playingVideo.collectAsState()
 
+    // Handle back button to return to home tab when in other tabs
+    androidx.activity.compose.BackHandler(enabled = currentTab != StreamCleanTab.DOWNLOAD && playingVideo == null) {
+        viewModel.selectTab(StreamCleanTab.DOWNLOAD)
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()

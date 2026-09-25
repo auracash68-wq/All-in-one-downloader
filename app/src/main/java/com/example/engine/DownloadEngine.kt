@@ -33,7 +33,8 @@ data class VideoFormatInfo(
     val note: String = "",
     val ext: String = "mp4",
     val filesizeApprox: String = "",
-    val isAudio: Boolean = false
+    val isAudio: Boolean = false,
+    val isHdr: Boolean = false
 )
 
 data class VideoMetadata(
@@ -46,6 +47,9 @@ data class VideoMetadata(
 ) {
     val formats: List<VideoFormatInfo>
         get() = if (videoFormats.isNotEmpty()) videoFormats else audioFormats
+
+    val hasSupportedVideoQuality: Boolean
+        get() = videoFormats.isNotEmpty()
 
     constructor(
         title: String,
@@ -70,7 +74,14 @@ data class ActiveDownloadState(
     val speed: String = "",
     val eta: String = "",
     val isRunning: Boolean = false,
-    val thumbnailUrl: String? = null
+    val isCompleted: Boolean = false,
+    val isFailed: Boolean = false,
+    val errorMessage: String = "",
+    val thumbnailUrl: String? = null,
+    val duration: String = "",
+    val formattedSize: String = "",
+    val filePath: String = "",
+    val mediaType: String = "VIDEO"
 )
 
 class DownloadEngine private constructor(private val context: Context) {
@@ -136,7 +147,7 @@ class DownloadEngine private constructor(private val context: Context) {
     suspend fun fetchFormats(url: String): VideoMetadata = withContext(Dispatchers.IO) {
         val sanitized = sanitizeUrlInput(url)
 
-        // 1. Direct media links (.mp4, .mp3, etc.) - fast probing without yt-dlp
+        // 1. Direct media links (.mp4, .mp3, etc.)
         if (isDirectMediaUrl(sanitized)) {
             val directMeta = probeDirectMediaUrl(sanitized)
             if (directMeta != null) {
@@ -146,7 +157,7 @@ class DownloadEngine private constructor(private val context: Context) {
 
         // 2. Real extraction via YoutubeDL
         ensureEngineInitialized()
-        Log.d(TAG, "Fetching video info using YoutubeDL for: $sanitized")
+        Log.d(TAG, "Fetching real video info using YoutubeDL for: $sanitized")
 
         val request = YoutubeDLRequest(sanitized).apply {
             addOption("--no-warnings")
@@ -164,7 +175,7 @@ class DownloadEngine private constructor(private val context: Context) {
         var title = videoInfo.title?.takeIf { it.isNotBlank() }
         var thumb = videoInfo.thumbnail?.takeIf { it.isNotBlank() }
 
-        // If title or thumbnail are missing, try oEmbed as supplemental metadata only
+        // Supplemental oEmbed lookup if needed
         if ((title == null || thumb == null) && isYouTubeUrl(sanitized)) {
             val supplemental = fetchOEmbedSupplemental(sanitized)
             if (supplemental != null) {
@@ -181,14 +192,12 @@ class DownloadEngine private constructor(private val context: Context) {
         val durationSecs = videoInfo.duration
         val durationStr = formatDuration(durationSecs)
 
-        val videoFormats = parseVideoFormats(videoInfo.formats)
+        // Parse video formats strictly applying the 144p to 720p policy
+        val videoFormats = parseVideoFormats(videoInfo.formats, durationSecs)
+        // Parse audio formats without the 144p-720p restriction
         val audioFormats = parseAudioFormats(videoInfo.formats, durationSecs)
 
-        if (videoFormats.isEmpty() && audioFormats.isEmpty()) {
-            throw YoutubeDLException("No downloadable video or audio streams found for URL: $sanitized")
-        }
-
-        Log.d(TAG, "Fetched real formats via YoutubeDL: $finalTitle, duration: $durationStr, video: ${videoFormats.size}, audio: ${audioFormats.size}")
+        Log.d(TAG, "Fetched real formats via YoutubeDL: '$finalTitle', duration: $durationStr, video formats (144p-720p): ${videoFormats.size}, audio formats: ${audioFormats.size}")
 
         return@withContext VideoMetadata(
             title = finalTitle,
@@ -253,7 +262,7 @@ class DownloadEngine private constructor(private val context: Context) {
             val sizeStr = if (length > 0) "~${formatFileSize(length)}" else ""
             val fmt = VideoFormatInfo(
                 formatId = "direct",
-                resolution = if (isAudio) "Direct Audio Stream" else "Direct Video Stream",
+                resolution = if (isAudio) "Direct Audio Stream" else "Direct Video Stream (720p)",
                 note = if (length > 0) formatFileSize(length) else "Direct Stream",
                 ext = cleanExt,
                 filesizeApprox = sizeStr,
@@ -310,6 +319,9 @@ class DownloadEngine private constructor(private val context: Context) {
         currentProcessId = processId
         isCancelled = false
 
+        // Cache thumbnail locally so offline viewing in Downloads tab has reliable original art
+        val localThumbPath = cacheThumbnailLocally(task.thumbnailUrl, safeTitle)
+
         _activeDownload.value = ActiveDownloadState(
             id = task.entityId,
             title = task.title,
@@ -318,7 +330,10 @@ class DownloadEngine private constructor(private val context: Context) {
             speed = "Starting...",
             eta = "",
             isRunning = true,
-            thumbnailUrl = task.thumbnailUrl
+            isCompleted = false,
+            thumbnailUrl = localThumbPath ?: task.thumbnailUrl,
+            duration = task.duration,
+            mediaType = task.mediaType
         )
 
         try {
@@ -343,6 +358,11 @@ class DownloadEngine private constructor(private val context: Context) {
                     addOption("--no-warnings")
                     addOption("--no-update")
                     addOption("--no-check-certificates")
+                    // Concurrency optimization for high download speed without server throttling
+                    addOption("-N", "4")
+                    addOption("--buffer-size", "64k")
+                    addOption("--retries", "3")
+                    addOption("--socket-timeout", "15")
 
                     if (task.mediaType == "AUDIO") {
                         addOption("-f", "bestaudio/best")
@@ -358,7 +378,7 @@ class DownloadEngine private constructor(private val context: Context) {
                             } else if (fmt.all { it.isDigit() }) {
                                 "$fmt+bestaudio/best"
                             } else if (fmt.contains("p")) {
-                                val h = fmt.replace("p", "").trim()
+                                val h = fmt.replace("p", "").replace(" HDR", "").trim()
                                 "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best"
                             } else {
                                 "$fmt+bestaudio/best"
@@ -378,8 +398,8 @@ class DownloadEngine private constructor(private val context: Context) {
                         val spd = extractSpeed(line)
                         _activeDownload.value = _activeDownload.value?.copy(
                             progress = p,
-                            speed = spd,
-                            eta = if (etaInSeconds > 0) "${etaInSeconds}s" else ""
+                            speed = if (p >= 100) "Processing..." else spd,
+                            eta = if (etaInSeconds > 0 && p < 100) "${etaInSeconds}s" else ""
                         )
                     }
                 }
@@ -390,7 +410,7 @@ class DownloadEngine private constructor(private val context: Context) {
                 return@withContext
             }
 
-            // Identify the actual output file created (yt-dlp may merge or adjust extension)
+            // Identify actual output file created
             val actualFile = if (outputFile.exists() && outputFile.length() > 0) {
                 outputFile
             } else {
@@ -407,6 +427,7 @@ class DownloadEngine private constructor(private val context: Context) {
             if (isValid) {
                 val fileSize = actualFile.length()
                 val formattedSize = formatFileSize(fileSize)
+                val finalThumb = localThumbPath ?: task.thumbnailUrl
 
                 val updatedEntity = DownloadEntity(
                     id = task.entityId,
@@ -417,7 +438,7 @@ class DownloadEngine private constructor(private val context: Context) {
                     fileSizeBytes = fileSize,
                     formattedSize = formattedSize,
                     duration = task.duration,
-                    thumbnailUri = task.thumbnailUrl,
+                    thumbnailUri = finalThumb,
                     mediaType = task.mediaType,
                     resolution = task.resolution,
                     status = "COMPLETED",
@@ -427,12 +448,30 @@ class DownloadEngine private constructor(private val context: Context) {
                 )
                 task.repository.updateDownload(updatedEntity)
                 Log.i(TAG, "Download finished successfully and verified: ${actualFile.name} ($formattedSize)")
+
+                // Update active state to successful completed state with checkmark info
+                _activeDownload.value = ActiveDownloadState(
+                    id = task.entityId,
+                    title = task.title,
+                    fileName = actualFile.name,
+                    progress = 100,
+                    speed = "",
+                    eta = "",
+                    isRunning = false,
+                    isCompleted = true,
+                    isFailed = false,
+                    thumbnailUrl = finalThumb,
+                    duration = task.duration,
+                    formattedSize = formattedSize,
+                    filePath = actualFile.absolutePath,
+                    mediaType = task.mediaType
+                )
             } else {
                 Log.e(TAG, "Output validation failed for ${task.title}. Marking as FAILED.")
                 if (actualFile.exists() && actualFile.length() == 0L) {
                     actualFile.delete()
                 }
-                markTaskFailed(task, safeFileName, "Validation failed: output media stream is invalid or empty")
+                markTaskFailed(task, safeFileName, "Validation failed: output media is invalid or empty")
             }
         } catch (e: Exception) {
             if (isCancelled) {
@@ -443,9 +482,12 @@ class DownloadEngine private constructor(private val context: Context) {
             markTaskFailed(task, safeFileName, e.message ?: "Download execution failed")
         } finally {
             cleanupTempFiles(downloadDir, safeFileName)
-            _activeDownload.value = null
             currentProcessId = null
         }
+    }
+
+    fun dismissActiveCard() {
+        _activeDownload.value = null
     }
 
     private suspend fun markTaskFailed(task: DownloadTask, fileName: String, errorReason: String) {
@@ -467,6 +509,19 @@ class DownloadEngine private constructor(private val context: Context) {
             timestamp = System.currentTimeMillis()
         )
         task.repository.updateDownload(failedEntity)
+        _activeDownload.value = ActiveDownloadState(
+            id = task.entityId,
+            title = task.title,
+            fileName = fileName,
+            progress = 0,
+            isRunning = false,
+            isCompleted = false,
+            isFailed = true,
+            errorMessage = errorReason,
+            thumbnailUrl = task.thumbnailUrl,
+            duration = task.duration,
+            mediaType = task.mediaType
+        )
         Log.w(TAG, "Task marked as FAILED for ${task.title}: $errorReason")
     }
 
@@ -477,6 +532,7 @@ class DownloadEngine private constructor(private val context: Context) {
         task.repository.deleteDownload(
             DownloadEntity(id = task.entityId, title = task.title, fileName = safeFileName)
         )
+        _activeDownload.value = null
     }
 
     private suspend fun runDirectDownload(urlStr: String, targetFile: File): Boolean = withContext(Dispatchers.IO) {
@@ -629,6 +685,32 @@ class DownloadEngine private constructor(private val context: Context) {
         return true
     }
 
+    private fun cacheThumbnailLocally(remoteUrl: String?, safeTitle: String): String? {
+        if (remoteUrl.isNullOrBlank() || !remoteUrl.startsWith("http")) return null
+        return try {
+            val thumbDir = File(context.filesDir, "thumbnails")
+            if (!thumbDir.exists()) thumbDir.mkdirs()
+            val thumbFile = File(thumbDir, "${safeTitle}_${System.currentTimeMillis() % 10000}.jpg")
+            val conn = URL(remoteUrl).openConnection() as HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            conn.connect()
+            if (conn.responseCode in 200..299) {
+                conn.inputStream.use { input ->
+                    FileOutputStream(thumbFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (thumbFile.exists() && thumbFile.length() > 0) {
+                    thumbFile.absolutePath
+                } else null
+            } else null
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to cache thumbnail locally: ${e.message}")
+            null
+        }
+    }
+
     private fun isDirectMediaUrl(url: String): Boolean {
         val clean = url.substringBefore("?").lowercase()
         return clean.endsWith(".mp4") || clean.endsWith(".mp3") || clean.endsWith(".m4a") ||
@@ -724,39 +806,87 @@ class DownloadEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun parseVideoFormats(formats: List<VideoFormat>?): List<VideoFormatInfo> {
+    /**
+     * Parse video formats strictly adhering to the 144p-720p policy:
+     * - ONLY show REAL available formats in the range: 144p, 240p, 360p, 480p, 720p.
+     * - Maximum allowed video quality: 720p. NEVER offer 1080p, 1440p, 2160p / 4K.
+     * - Minimum allowed video quality: 144p.
+     * - Include HDR variants only if real HDR exists at that resolution.
+     * - Accurately calculate/estimate real file size.
+     */
+    private fun parseVideoFormats(formats: List<VideoFormat>?, durationSecs: Int): List<VideoFormatInfo> {
         if (formats.isNullOrEmpty()) {
             return emptyList()
         }
 
-        val videoFormats = formats.filter {
-            (it.vcodec != null && it.vcodec != "none") || it.height > 0
+        // Filter video formats strictly between 144p and 720p (inclusive)
+        val videoStreams = formats.filter { fmt ->
+            val hasVideo = (fmt.vcodec != null && fmt.vcodec != "none") || fmt.height > 0
+            hasVideo && fmt.height in 144..720
         }
 
-        if (videoFormats.isEmpty()) {
+        if (videoStreams.isEmpty()) {
             return emptyList()
         }
 
-        val groupedByHeight = videoFormats
-            .filter { it.height > 0 }
-            .groupBy { it.height }
-            .toSortedMap(compareByDescending { it })
+        // Map height to standard display categories
+        fun mapToStandardHeight(h: Int): Int {
+            return when {
+                h in 680..720 -> 720
+                h in 440..500 -> 480
+                h in 320..380 -> 360
+                h in 200..260 -> 240
+                h in 140..160 -> 144
+                else -> h
+            }
+        }
+
+        // Group by (StandardHeight, isHDR)
+        val grouped = videoStreams.groupBy { fmt ->
+            val stdH = mapToStandardHeight(fmt.height)
+            val isHdr = (fmt.formatNote?.contains("HDR", ignoreCase = true) == true) ||
+                        (fmt.vcodec?.contains("hdr", ignoreCase = true) == true) ||
+                        (fmt.format?.contains("HDR", ignoreCase = true) == true)
+            Pair(stdH, isHdr)
+        }
 
         val result = mutableListOf<VideoFormatInfo>()
 
-        for ((height, list) in groupedByHeight) {
+        // Sort descending by height, then standard first, HDR second
+        val sortedKeys = grouped.keys.sortedWith(
+            compareByDescending<Pair<Int, Boolean>> { it.first }.thenBy { it.second }
+        )
+
+        for ((height, isHdr) in sortedKeys) {
+            val list = grouped[Pair(height, isHdr)] ?: continue
             val best = list.maxByOrNull {
-                val s = if (it.fileSize > 0) it.fileSize else it.fileSizeApproximate
-                s
+                if (it.fileSize > 0) it.fileSize else it.fileSizeApproximate
             } ?: list.first()
 
-            val sizeBytes = if (best.fileSize > 0) best.fileSize else best.fileSizeApproximate
+            // Calculate real / accurately estimated size
+            val sizeBytes = when {
+                best.fileSize > 0 -> best.fileSize
+                best.fileSizeApproximate > 0 -> best.fileSizeApproximate
+                best.tbr > 0 && durationSecs > 0 -> ((best.tbr.toDouble() * 1000.0 / 8.0) * durationSecs).toLong()
+                best.abr > 0 && durationSecs > 0 -> ((best.abr.toDouble() * 1000.0 / 8.0) * durationSecs).toLong()
+                durationSecs > 0 -> {
+                    // Standard bitrate estimate for resolution
+                    val estKbps = when (height) {
+                        720 -> 1800
+                        480 -> 900
+                        360 -> 500
+                        240 -> 280
+                        144 -> 150
+                        else -> 700
+                    }
+                    (durationSecs.toLong() * estKbps * 1000L) / 8L
+                }
+                else -> 0L
+            }
+
             val sizeStr = if (sizeBytes > 0) "~${formatFileSize(sizeBytes)}" else ""
 
-            val resLabel = when (height) {
-                2160 -> "4K (2160p)"
-                1440 -> "2K (1440p)"
-                1080 -> "1080p (Full HD)"
+            val resBase = when (height) {
                 720 -> "720p (HD)"
                 480 -> "480p (SD)"
                 360 -> "360p (Low)"
@@ -765,7 +895,8 @@ class DownloadEngine private constructor(private val context: Context) {
                 else -> "${height}p"
             }
 
-            val note = best.formatNote ?: if (height >= 720) "High Quality" else "Standard"
+            val resLabel = if (isHdr) "$resBase HDR" else resBase
+            val note = if (isHdr) "HDR High Dynamic Range" else (best.formatNote ?: if (height >= 720) "Recommended" else "Standard")
             val fmtId = best.formatId ?: "${height}p"
 
             result.add(
@@ -775,7 +906,8 @@ class DownloadEngine private constructor(private val context: Context) {
                     note = note,
                     ext = best.ext ?: "mp4",
                     filesizeApprox = sizeStr,
-                    isAudio = false
+                    isAudio = false,
+                    isHdr = isHdr
                 )
             )
         }
@@ -783,12 +915,15 @@ class DownloadEngine private constructor(private val context: Context) {
         return result
     }
 
+    /**
+     * Audio formats: NO 144p-720p restriction.
+     * Shows actual audio options derived from source stream or standard high-quality MP3 conversions.
+     */
     private fun parseAudioFormats(formats: List<VideoFormat>?, durationSecs: Int): List<VideoFormatInfo> {
         val audioStreams = formats?.filter {
             (it.acodec != null && it.acodec != "none") || (it.vcodec == "none" && it.abr > 0)
         }
 
-        // If no audio streams found and no video formats found, audio cannot be extracted
         if (formats != null && audioStreams.isNullOrEmpty() && formats.none { it.vcodec != "none" }) {
             return emptyList()
         }
