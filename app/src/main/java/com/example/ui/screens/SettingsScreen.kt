@@ -21,12 +21,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.BrightnessMedium
-import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Translate
-import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -55,6 +53,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.preferences.SettingsManager
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -74,8 +73,6 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val downloadLocation by viewModel.downloadLocation.collectAsState()
-    val wifiOnly by viewModel.wifiOnly.collectAsState()
     val appearance by viewModel.appearance.collectAsState()
     val language by viewModel.language.collectAsState()
     val notificationsEnabled by viewModel.notificationsEnabled.collectAsState()
@@ -108,73 +105,13 @@ fun SettingsScreen(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "StreamClean preferences & storage configuration",
+                text = "StreamClean preferences & interface configuration",
                 fontSize = 14.sp,
                 color = TextSecondary,
-                modifier = Modifier.padding(bottom = 24.dp)
+                modifier = Modifier.padding(bottom = 20.dp)
             )
 
-            // Section 1: DOWNLOADS / Storage & Data
-            SectionHeader(title = "DOWNLOADS", rightLabel = "Storage & Data")
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = CardSurface),
-                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Download location
-                    SettingsItemRow(
-                        icon = Icons.Outlined.Folder,
-                        title = "Download location",
-                        subtitle = downloadLocation,
-                        onClick = {
-                            Toast.makeText(context, "Location: $downloadLocation", Toast.LENGTH_SHORT).show()
-                        },
-                        trailing = {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = null,
-                                tint = Color(0xFF9CA3AF),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    )
-
-                    HorizontalDivider(
-                        thickness = 0.8.dp,
-                        color = DividerColor,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-
-                    // Download over Wi-Fi only
-                    SettingsItemRow(
-                        icon = Icons.Outlined.Wifi,
-                        title = "Download over Wi-Fi only",
-                        subtitle = "Conserve cellular network data",
-                        trailing = {
-                            Switch(
-                                checked = wifiOnly,
-                                onCheckedChange = { viewModel.setWifiOnly(it) },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = PrimaryGreen,
-                                    uncheckedThumbColor = Color.White,
-                                    uncheckedTrackColor = Color(0xFFD1D5DB)
-                                ),
-                                modifier = Modifier.testTag("switch_wifi_only")
-                            )
-                        }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Section 2: PREFERENCES / Interface
+            // Section 1: PREFERENCES / Interface
             SectionHeader(title = "PREFERENCES", rightLabel = "Interface")
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -186,7 +123,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    // Appearance
+                    // Appearance (System default / Light / Dark)
                     SettingsItemRow(
                         icon = Icons.Outlined.BrightnessMedium,
                         title = "Appearance",
@@ -208,7 +145,8 @@ fun SettingsScreen(
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
 
-                    // Language
+                    // Language Switcher
+                    val langCode = SettingsManager.getLanguageCodeDisplay(language)
                     SettingsItemRow(
                         icon = Icons.Outlined.Translate,
                         title = "Language",
@@ -217,7 +155,7 @@ fun SettingsScreen(
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "EN",
+                                    text = langCode,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color(0xFF15803D),
@@ -239,7 +177,7 @@ fun SettingsScreen(
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
 
-                    // Notifications
+                    // Notifications (Download completion alerts)
                     SettingsItemRow(
                         icon = Icons.Outlined.Notifications,
                         title = "Notifications",
@@ -263,7 +201,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Section 3: ABOUT & LEGAL / Verified Build
+            // Section 2: ABOUT & LEGAL / Verified Build
             SectionHeader(title = "ABOUT & LEGAL", rightLabel = "Verified Build")
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -288,7 +226,7 @@ fun SettingsScreen(
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(MintBadgeBg)
                                         .padding(horizontal = 8.dp, vertical = 3.dp)
-                                ) {
+                                    ) {
                                     Text(
                                         text = "Latest",
                                         fontSize = 11.sp,
@@ -384,7 +322,7 @@ fun SettingsScreen(
             )
         }
 
-        // Appearance Dialog
+        // Appearance Dialog (System default / Light / Dark)
         if (showAppearanceDialog) {
             val options = listOf("System default", "Light", "Dark")
             AlertDialog(
@@ -428,9 +366,9 @@ fun SettingsScreen(
             )
         }
 
-        // Language Dialog
+        // Language Switcher Dialog
         if (showLanguageDialog) {
-            val languages = listOf("English", "Español", "Français", "Deutsch", "日本語")
+            val languages = listOf("English", "Español", "Français", "Deutsch", "বাংলা", "हिन्दी", "العربية", "日本語")
             AlertDialog(
                 onDismissRequest = { showLanguageDialog = false },
                 title = { Text("Select Language", fontWeight = FontWeight.Bold) },
@@ -443,6 +381,7 @@ fun SettingsScreen(
                                     .clickable {
                                         viewModel.setLanguage(lang)
                                         showLanguageDialog = false
+                                        Toast.makeText(context, "Language changed to $lang", Toast.LENGTH_SHORT).show()
                                     }
                                     .padding(vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -452,6 +391,7 @@ fun SettingsScreen(
                                     onClick = {
                                         viewModel.setLanguage(lang)
                                         showLanguageDialog = false
+                                        Toast.makeText(context, "Language changed to $lang", Toast.LENGTH_SHORT).show()
                                     },
                                     colors = RadioButtonDefaults.colors(selectedColor = PrimaryGreen)
                                 )

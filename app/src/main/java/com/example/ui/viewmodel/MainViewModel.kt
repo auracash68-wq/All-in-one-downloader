@@ -3,11 +3,13 @@ package com.example.ui.viewmodel
 import android.app.Application
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.StreamCleanApplication
@@ -31,6 +33,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -55,11 +58,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val selectedFormatTab: StateFlow<String> = _selectedFormatTab.asStateFlow()
 
     val activeDownload: StateFlow<ActiveDownloadState?> = downloadEngine.activeDownload
+    val downloadCards: StateFlow<List<ActiveDownloadState>> = downloadEngine.downloadCards
 
     private val _filterMediaType = MutableStateFlow("VIDEO") // "VIDEO" or "AUDIO"
     val filterMediaType: StateFlow<String> = _filterMediaType.asStateFlow()
 
     val allDownloads: StateFlow<List<DownloadEntity>> = repository.allDownloads
+        .map { list ->
+            list.filter {
+                it.status == "COMPLETED" && it.filePath.isNotEmpty() &&
+                java.io.File(it.filePath).exists() && java.io.File(it.filePath).length() > 0
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _showingPrivateFiles = MutableStateFlow(false)
+    val showingPrivateFiles: StateFlow<Boolean> = _showingPrivateFiles.asStateFlow()
+
+    val privateDownloads: StateFlow<List<DownloadEntity>> = repository.privateDownloads
+        .map { list ->
+            list.filter {
+                it.status == "COMPLETED" && it.filePath.isNotEmpty() &&
+                java.io.File(it.filePath).exists() && java.io.File(it.filePath).length() > 0
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val filteredDownloads: StateFlow<List<DownloadEntity>> = combine(allDownloads, _filterMediaType) { list, filter ->
@@ -126,8 +148,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Preferences
-    val downloadLocation = settingsManager.downloadLocation
-    val wifiOnly = settingsManager.wifiOnly
     val appearance = settingsManager.appearance
     val language = settingsManager.language
     val notificationsEnabled = settingsManager.notificationsEnabled
@@ -199,21 +219,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sanitizedUrl = sanitizeUrl(rawUrl)
         Log.d(TAG, "Initiating video fetch. Raw: $rawUrl -> Sanitized: $sanitizedUrl")
 
-        // Check Wi-Fi only restriction if enabled
-        if (wifiOnly.value && !isConnectedToWifi(context)) {
-            Toast.makeText(context, "Wi-Fi Only is enabled. Connect to Wi-Fi to download.", Toast.LENGTH_LONG).show()
-            return
-        }
+        val requestedMediaType = if (_selectedFormatTab.value == "MP3 Audio") "AUDIO" else "VIDEO"
 
-        // Reuse already extracted metadata if safe to prevent duplicate network latency
-        val currentPreview = _videoPreview.value
-        if (currentPreview != null && sanitizedUrl == lastExtractedUrl) {
-            handleMetadataResult(currentPreview, context)
-            return
-        }
-
-        // Fetch format profiles for resolution/bitrate selection using real YoutubeDL engine
+        // Duplicate protection against verified local files
         viewModelScope.launch(Dispatchers.IO) {
+            val duplicate = repository.findVerifiedDownloadedMedia(sanitizedUrl, _videoPreview.value, requestedMediaType)
+            if (duplicate != null) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        "Already Downloaded\nThis video is already available in Downloads. Please check your Downloads page.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@launch
+            }
+
+            // Reuse already extracted metadata if safe to prevent duplicate network latency
+            val currentPreview = _videoPreview.value
+            if (currentPreview != null && sanitizedUrl == lastExtractedUrl) {
+                withContext(Dispatchers.Main) {
+                    handleMetadataResult(currentPreview, context)
+                }
+                return@launch
+            }
+
+            // Fetch format profiles for resolution/bitrate selection using real YoutubeDL engine
             _isLoadingFormats.value = true
             try {
                 val metadata = repository.fetchVideoInfo(sanitizedUrl)
@@ -279,44 +310,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        executeSingleDownload(format, metadata, rawUrl)
+        val mediaType = if (_selectedFormatTab.value == "MP3 Audio" || format.isAudio) "AUDIO" else "VIDEO"
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val duplicate = repository.findVerifiedDownloadedMedia(rawUrl, metadata, mediaType)
+            if (duplicate != null) {
+                withContext(Dispatchers.Main) {
+                    _formatDialogMetadata.value = null
+                    Toast.makeText(
+                        getApplication(),
+                        "Already Downloaded\nThis video is already available in Downloads. Please check your Downloads page.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@launch
+            }
+
+            withContext(Dispatchers.Main) {
+                executeSingleDownload(format, metadata, rawUrl)
+            }
+        }
     }
 
     private fun executeSingleDownload(format: VideoFormatInfo, metadata: VideoMetadata, rawUrl: String) {
         val sanitizedUrl = sanitizeUrl(rawUrl)
         val isAudio = _selectedFormatTab.value == "MP3 Audio" || format.isAudio
         val mediaType = if (isAudio) "AUDIO" else "VIDEO"
-        val extension = if (isAudio) "mp3" else "mp4"
         val title = metadata.title.ifEmpty { "StreamClean Download" }
-        val fileName = "${title.replace(Regex("[^a-zA-Z0-9._-]"), "_")}.$extension"
 
         _formatDialogMetadata.value = null
+        _videoPreview.value = null
+        _urlInput.value = ""
+        lastExtractedUrl = ""
 
         viewModelScope.launch(Dispatchers.IO) {
-            val entity = DownloadEntity(
-                url = sanitizedUrl,
-                title = title,
-                fileName = fileName,
-                filePath = "",
-                fileSizeBytes = 0L,
-                formattedSize = format.filesizeApprox.ifEmpty { "Calculating..." },
-                duration = metadata.duration,
-                thumbnailUri = metadata.thumbnailUrl,
-                mediaType = mediaType,
-                resolution = format.resolution,
-                status = "DOWNLOADING",
-                progress = 0,
-                relativeDate = "Today",
-                timestamp = System.currentTimeMillis()
-            )
-            val id = repository.insertDownload(entity)
+            val id = System.currentTimeMillis()
 
             // Start foreground service on main thread
             withContext(Dispatchers.Main) {
                 DownloadService.start(getApplication())
             }
 
-            // Enqueue to engine with real format ID and parameters
+            // Enqueue to engine with real format ID and parameters.
+            // Entity is only persisted into Room upon verified completion.
             downloadEngine.enqueueDownload(
                 entityId = id,
                 url = sanitizedUrl,
@@ -437,11 +473,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (wifiOnly.value && !isConnectedToWifi(context)) {
-            Toast.makeText(context, "Wi-Fi Only is enabled. Connect to Wi-Fi to download.", Toast.LENGTH_LONG).show()
-            return
-        }
-
         _showMultipleUrlDialog.value = false
         val isAudio = _multipleFormatType.value == "MP3 Audio"
         val mediaType = if (isAudio) "AUDIO" else "VIDEO"
@@ -465,27 +496,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             urls.forEachIndexed { index, rawUrl ->
                 val sanitizedUrl = sanitizeUrl(rawUrl)
-                val safeTitle = "Download_${index + 1}"
-                val ext = if (isAudio) "mp3" else "mp4"
-                val fileName = "${safeTitle}_${System.currentTimeMillis() % 100000}.$ext"
-
-                val entity = DownloadEntity(
-                    url = sanitizedUrl,
-                    title = "Queued link ${index + 1}",
-                    fileName = fileName,
-                    filePath = "",
-                    fileSizeBytes = 0L,
-                    formattedSize = "Queued",
-                    duration = "",
-                    thumbnailUri = null,
-                    mediaType = mediaType,
-                    resolution = resolution,
-                    status = "DOWNLOADING",
-                    progress = 0,
-                    relativeDate = "Today",
-                    timestamp = System.currentTimeMillis() + index
-                )
-                val id = repository.insertDownload(entity)
+                val id = System.currentTimeMillis() + index
 
                 downloadEngine.enqueueDownload(
                     entityId = id,
@@ -510,6 +521,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         DownloadService.stop(getApplication())
     }
 
+    fun cancelDownload(id: Long) {
+        downloadEngine.cancelDownload(id)
+    }
+
+    fun dismissDownloadCard(id: Long) {
+        downloadEngine.dismissCard(id)
+    }
+
     fun dismissActiveCard() {
         downloadEngine.dismissActiveCard()
     }
@@ -517,6 +536,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteDownload(item: DownloadEntity) {
         viewModelScope.launch {
             repository.deleteDownload(item)
+        }
+    }
+
+    fun openPrivateFiles() {
+        _showingPrivateFiles.value = true
+    }
+
+    fun closePrivateFiles() {
+        _showingPrivateFiles.value = false
+    }
+
+    fun moveToPrivate(item: DownloadEntity, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val result = repository.moveToPrivate(item)
+            onResult(result != null)
+        }
+    }
+
+    fun removeFromPrivate(item: DownloadEntity, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val result = repository.removeFromPrivate(item)
+            onResult(result != null)
+        }
+    }
+
+    fun shareFile(context: Context, item: DownloadEntity) {
+        try {
+            if (item.filePath.isEmpty()) {
+                Toast.makeText(context, "File path is empty", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val file = java.io.File(item.filePath)
+            if (!file.exists() || file.length() <= 0) {
+                Toast.makeText(context, "File not found or empty on storage", Toast.LENGTH_SHORT).show()
+                return
+            }
+
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+
+            val isVideo = item.mediaType == "VIDEO" || file.name.endsWith(".mp4", ignoreCase = true)
+            val mimeType = if (isVideo) "video/mp4" else "audio/mpeg"
+
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, item.title)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "Share via"))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sharing file via FileProvider", e)
+            Toast.makeText(context, "Failed to share: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -553,10 +628,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentTab.value = StreamCleanTab.DOWNLOAD
     }
 
-    fun setWifiOnly(enabled: Boolean) {
-        settingsManager.setWifiOnly(enabled)
-    }
-
     fun setNotificationsEnabled(enabled: Boolean) {
         settingsManager.setNotificationsEnabled(enabled)
     }
@@ -567,17 +638,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setLanguage(lang: String) {
         settingsManager.setLanguage(lang)
-    }
-
-    fun setDownloadLocation(loc: String) {
-        settingsManager.setDownloadLocation(loc)
-    }
-
-    private fun isConnectedToWifi(context: Context): Boolean {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = cm.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(network) ?: return false
-        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     companion object {

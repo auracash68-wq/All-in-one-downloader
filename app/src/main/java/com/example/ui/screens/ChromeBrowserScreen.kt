@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Intent
 import android.graphics.Bitmap
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -42,6 +44,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +65,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -96,6 +102,22 @@ fun ChromeBrowserScreen(
             webViewInstance?.goBack()
         } else {
             onBack?.invoke()
+        }
+    }
+
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        val window = (view.context as? Activity)?.window
+        val insetsController = window?.let { WindowInsetsControllerCompat(it, view) }
+        insetsController?.let { controller ->
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+        onDispose {
+            window?.let { w ->
+                val controller = WindowInsetsControllerCompat(w, view)
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
@@ -275,9 +297,45 @@ fun ChromeBrowserScreen(
                                     view: WebView?,
                                     request: WebResourceRequest?
                                 ): Boolean {
-                                    val url = request?.url?.toString() ?: return false
-                                    view?.loadUrl(url)
-                                    return true
+                                    val uri = request?.url ?: return false
+                                    val url = uri.toString()
+
+                                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                                        return false // Let WebView handle normal web URLs
+                                    }
+
+                                    try {
+                                        if (url.startsWith("intent://")) {
+                                            val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                                            if (intent != null) {
+                                                val context = view?.context ?: return true
+                                                try {
+                                                    context.startActivity(intent)
+                                                    return true
+                                                } catch (e: Exception) {
+                                                    val fallbackUrl = intent.getStringExtra("browser_fallback_url")
+                                                    if (!fallbackUrl.isNullOrEmpty()) {
+                                                        view?.loadUrl(fallbackUrl)
+                                                        return true
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            val intent = Intent(Intent.ACTION_VIEW, uri)
+                                            intent.addCategory(Intent.CATEGORY_BROWSABLE)
+                                            val context = view?.context ?: return true
+                                            try {
+                                                context.startActivity(intent)
+                                                return true
+                                            } catch (e: Exception) {
+                                                // No handler available for custom scheme
+                                                return true
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        // Catch all to prevent any crash
+                                    }
+                                    return true // Consume unhandled non-http schemes to prevent ERR_UNKNOWN_URL_SCHEME
                                 }
 
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {

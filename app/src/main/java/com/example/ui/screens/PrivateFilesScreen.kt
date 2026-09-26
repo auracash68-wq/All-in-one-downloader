@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,15 +15,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.MusicNote
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.SaveAlt
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -54,36 +60,28 @@ import com.example.data.local.DownloadEntity
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
-import com.example.ui.theme.ChipInactiveBg
-import com.example.ui.theme.ChipInactiveText
 import com.example.ui.theme.DividerColor
+import com.example.ui.theme.MintGreenLight
 import com.example.ui.theme.MintGreenPill
 import com.example.ui.theme.MintGreenPillDarkText
+import com.example.ui.theme.PrimaryGreen
+import com.example.ui.theme.PrimaryGreenDark
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.MainViewModel
 
 @Composable
-fun DownloadsScreen(
+fun PrivateFilesScreen(
     viewModel: MainViewModel,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val showingPrivateFiles by viewModel.showingPrivateFiles.collectAsState()
+    val privateDownloads by viewModel.privateDownloads.collectAsState()
 
-    if (showingPrivateFiles) {
-        PrivateFilesScreen(
-            viewModel = viewModel,
-            onBack = { viewModel.closePrivateFiles() },
-            modifier = modifier
-        )
-        return
+    BackHandler {
+        onBack()
     }
-
-    val filteredDownloads by viewModel.filteredDownloads.collectAsState()
-    val selectedFilter by viewModel.filterMediaType.collectAsState()
-
-    val fileCountText = "${filteredDownloads.size} files"
 
     Box(
         modifier = modifier
@@ -95,139 +93,114 @@ fun DownloadsScreen(
                 .fillMaxSize()
                 .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
-            // Header Row: "Downloads" title + "Private Files" button + count badge on right
+            // Header Row: Back button + "Private Files" title + count badge
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .padding(bottom = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("private_files_back_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back to Downloads",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
                 Text(
-                    text = "Downloads",
-                    fontSize = 28.sp,
+                    text = "Private Files",
+                    fontSize = 26.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary,
-                    modifier = Modifier.testTag("downloads_screen_title")
+                    modifier = Modifier.weight(1f)
                 )
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // Count badge
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MintGreenPill)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    // "Private Files" Button with lock icon
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(MintGreenPill)
-                            .clickable { viewModel.openPrivateFiles() }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                            .testTag("private_files_button"),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Outlined.Lock,
-                            contentDescription = "Private Files",
+                            contentDescription = null,
                             tint = MintGreenPillDarkText,
-                            modifier = Modifier.size(15.dp)
+                            modifier = Modifier.size(13.dp)
                         )
-                        Spacer(modifier = Modifier.width(5.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "Private Files",
+                            text = "${privateDownloads.size} private",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = MintGreenPillDarkText
                         )
                     }
+                }
+            }
 
-                    // Pill Badge on right e.g. "X files"
+            // Security Info Banner
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F2)),
+                border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFFE8ECE9))
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MintGreenLight),
+                        contentAlignment = Alignment.Center
                     ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Shield,
+                            contentDescription = "Protected",
+                            tint = PrimaryGreenDark,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = fileCountText,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color(0xFF4B5563)
+                            text = "Private Media Vault",
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Hidden from system gallery and other apps via .nomedia protection.",
+                            fontSize = 11.5.sp,
+                            color = TextSecondary
                         )
                     }
                 }
             }
 
-            // Filter Tabs: "Video" (active pill) and "Audio"
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 20.dp),
-                horizontalArrangement = Arrangement.Start
-            ) {
-                // Video Pill
-                val isVideo = selectedFilter == "VIDEO"
-                val videoBg = if (isVideo) MintGreenPill else ChipInactiveBg
-                val videoTextColor = if (isVideo) MintGreenPillDarkText else ChipInactiveText
-
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(videoBg)
-                        .clickable { viewModel.setFilterMediaType("VIDEO") }
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .testTag("filter_video"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Videocam,
-                        contentDescription = "Video",
-                        tint = videoTextColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Video",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = videoTextColor
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                // Audio Pill
-                val isAudio = selectedFilter == "AUDIO"
-                val audioBg = if (isAudio) MintGreenPill else ChipInactiveBg
-                val audioTextColor = if (isAudio) MintGreenPillDarkText else ChipInactiveText
-
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(audioBg)
-                        .clickable { viewModel.setFilterMediaType("AUDIO") }
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .testTag("filter_audio"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.MusicNote,
-                        contentDescription = "Audio",
-                        tint = audioTextColor,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Audio",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = audioTextColor
-                    )
-                }
-            }
-
-            // Downloads List Container Card
-            if (filteredDownloads.isEmpty()) {
-                // Empty state
+            // Private Downloads List
+            if (privateDownloads.isEmpty()) {
                 Card(
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = CardSurface),
@@ -235,7 +208,7 @@ fun DownloadsScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 16.dp)
+                        .padding(top = 8.dp)
                 ) {
                     Column(
                         modifier = Modifier
@@ -244,23 +217,24 @@ fun DownloadsScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            imageVector = if (selectedFilter == "VIDEO") Icons.Outlined.Videocam else Icons.Outlined.MusicNote,
-                            contentDescription = "No files",
+                            imageVector = Icons.Outlined.Lock,
+                            contentDescription = "No private files",
                             tint = TextSecondary,
                             modifier = Modifier.size(48.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "No $selectedFilter downloads yet",
+                            text = "No private files yet",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = TextPrimary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Paste a video link in the Download tab to save offline",
+                            text = "Tap the 3-dot menu on any file in Downloads and select 'Add to Private'.",
                             fontSize = 13.sp,
-                            color = TextSecondary
+                            color = TextSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
                 }
@@ -272,11 +246,11 @@ fun DownloadsScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("downloads_card_list")
+                        .testTag("private_files_card_list")
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        filteredDownloads.forEachIndexed { index, download ->
-                            DownloadListItemRow(
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        itemsIndexed(privateDownloads, key = { _, item -> item.id }) { index, download ->
+                            PrivateListItemRow(
                                 item = download,
                                 onClick = { viewModel.playVideo(download) },
                                 onDelete = { viewModel.deleteDownload(download) },
@@ -289,15 +263,15 @@ fun DownloadsScreen(
                                 onShare = {
                                     viewModel.shareFile(context, download)
                                 },
-                                onAddToPrivate = {
-                                    viewModel.moveToPrivate(download) { success ->
-                                        val msg = if (success) "File moved to Private Files" else "Failed to move file"
+                                onRemoveFromPrivate = {
+                                    viewModel.removeFromPrivate(download) { success ->
+                                        val msg = if (success) "Moved back to Downloads" else "Failed to move file"
                                         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             )
 
-                            if (index < filteredDownloads.size - 1) {
+                            if (index < privateDownloads.size - 1) {
                                 HorizontalDivider(
                                     thickness = 0.8.dp,
                                     color = DividerColor,
@@ -313,13 +287,13 @@ fun DownloadsScreen(
 }
 
 @Composable
-fun DownloadListItemRow(
+fun PrivateListItemRow(
     item: DownloadEntity,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
     onShare: () -> Unit,
-    onAddToPrivate: () -> Unit,
+    onRemoveFromPrivate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -330,11 +304,10 @@ fun DownloadListItemRow(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp)
-            .testTag("download_row_${item.id}"),
+            .testTag("private_download_row_${item.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isAudio) {
-            // Dedicated clean audio card representation
             Box(
                 modifier = Modifier
                     .size(48.dp)
@@ -359,7 +332,6 @@ fun DownloadListItemRow(
                 }
             }
         } else {
-            // Real Original Video Thumbnail with duration overlay badge
             Box(
                 modifier = Modifier
                     .size(width = 72.dp, height = 50.dp)
@@ -383,7 +355,6 @@ fun DownloadListItemRow(
                     )
                 }
 
-                // Duration Pill Overlay at bottom right
                 if (item.duration.isNotEmpty()) {
                     Box(
                         modifier = Modifier
@@ -459,16 +430,6 @@ fun DownloadListItemRow(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Add to Private", color = TextPrimary) },
-                    leadingIcon = {
-                        Icon(Icons.Outlined.Lock, contentDescription = null, tint = TextPrimary)
-                    },
-                    onClick = {
-                        menuExpanded = false
-                        onAddToPrivate()
-                    }
-                )
-                DropdownMenuItem(
                     text = { Text("Export to Gallery", color = TextPrimary) },
                     leadingIcon = {
                         Icon(Icons.Outlined.SaveAlt, contentDescription = null, tint = TextPrimary)
@@ -486,6 +447,16 @@ fun DownloadListItemRow(
                     onClick = {
                         menuExpanded = false
                         onShare()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Remove from Private", color = TextPrimary) },
+                    leadingIcon = {
+                        Icon(Icons.Outlined.LockOpen, contentDescription = null, tint = TextPrimary)
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onRemoveFromPrivate()
                     }
                 )
                 DropdownMenuItem(

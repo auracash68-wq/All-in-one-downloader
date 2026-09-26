@@ -7,9 +7,12 @@ import com.example.R
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -55,6 +59,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -74,8 +79,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import coil.compose.AsyncImage
 import com.example.data.local.DownloadEntity
+import com.example.engine.ActiveDownloadState
 import com.example.engine.VideoFormatInfo
 import com.example.engine.VideoMetadata
 import com.example.ui.theme.AppBackground
@@ -98,7 +105,7 @@ fun DownloadHomeScreen(
     val context = LocalContext.current
     val urlInput by viewModel.urlInput.collectAsState()
     val selectedFormatTab by viewModel.selectedFormatTab.collectAsState()
-    val activeDownload by viewModel.activeDownload.collectAsState()
+    val downloadCards by viewModel.downloadCards.collectAsState()
     val videoPreview by viewModel.videoPreview.collectAsState()
     val formatDialogMetadata by viewModel.formatDialogMetadata.collectAsState()
     val isLoadingFormats by viewModel.isLoadingFormats.collectAsState()
@@ -443,67 +450,44 @@ fun DownloadHomeScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Real Active Download / Preview / Completed Success Card
-            val isDownloading = activeDownload != null && activeDownload!!.isRunning
-            val isCompleted = activeDownload != null && activeDownload!!.isCompleted
-            val isFailed = activeDownload != null && activeDownload!!.isFailed
-            val hasPreview = videoPreview != null && activeDownload == null
-
+            // 1. Standalone Video Preview Card (when metadata extracted but download not yet initiated)
+            val hasPreview = videoPreview != null && downloadCards.none { it.url == urlInput.trim() && it.isRunning }
             AnimatedVisibility(
-                visible = isDownloading || isCompleted || isFailed || hasPreview,
+                visible = hasPreview,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                val currentTitle = when {
-                    activeDownload != null -> activeDownload!!.title.ifEmpty { activeDownload!!.fileName }
-                    videoPreview != null -> videoPreview!!.title
-                    else -> ""
-                }
-
-                val currentThumb = when {
-                    activeDownload != null -> activeDownload!!.thumbnailUrl
-                    videoPreview != null -> videoPreview!!.thumbnailUrl
-                    else -> null
-                }
-
-                val currentDuration = when {
-                    activeDownload != null -> activeDownload!!.duration
-                    videoPreview != null -> videoPreview!!.duration
-                    else -> ""
-                }
-
-                val progressInt = activeDownload?.progress ?: 0
-                val progressFloat = progressInt / 100f
-
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = CardSurface),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("active_download_card")
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                videoPreview?.let { preview ->
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = CardSurface),
+                        border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .testTag("video_preview_card")
+                    ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp)
                         ) {
-                            // Large Original Thumbnail (16:9 / clear fit with duration badge)
                             Box(
                                 modifier = Modifier
-                                    .size(width = 84.dp, height = 58.dp)
-                                    .clip(RoundedCornerShape(10.dp))
+                                    .size(width = 76.dp, height = 52.dp)
+                                    .clip(RoundedCornerShape(8.dp))
                                     .background(Color(0xFF222222)),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (!currentThumb.isNullOrEmpty()) {
+                                if (!preview.thumbnailUrl.isNullOrEmpty()) {
                                     AsyncImage(
-                                        model = currentThumb,
-                                        contentDescription = "Original Thumbnail",
-                                        contentScale = ContentScale.Fit,
+                                        model = preview.thumbnailUrl,
+                                        contentDescription = "Preview Thumbnail",
+                                        contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
@@ -511,185 +495,90 @@ fun DownloadHomeScreen(
                                         imageVector = if (selectedFormatTab == "MP3 Audio") Icons.Outlined.MusicNote else Icons.Outlined.Movie,
                                         contentDescription = "Media Icon",
                                         tint = Color.White.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(28.dp)
+                                        modifier = Modifier.size(24.dp)
                                     )
                                 }
 
-                                if (currentDuration.isNotEmpty()) {
+                                if (preview.duration.isNotEmpty()) {
                                     Box(
                                         modifier = Modifier
                                             .align(Alignment.BottomEnd)
-                                            .padding(3.dp)
+                                            .padding(2.dp)
                                             .clip(RoundedCornerShape(4.dp))
                                             .background(Color.Black.copy(alpha = 0.8f))
                                             .padding(horizontal = 4.dp, vertical = 1.dp)
                                     ) {
                                         Text(
-                                            text = currentDuration,
+                                            text = preview.duration,
                                             color = Color.White,
-                                            fontSize = 10.sp,
+                                            fontSize = 9.5.sp,
                                             fontWeight = FontWeight.Medium
                                         )
                                     }
                                 }
                             }
 
-                            Spacer(modifier = Modifier.width(14.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
 
-                            // Filename & Status Info
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = currentTitle,
-                                    fontSize = 15.sp,
+                                    text = preview.title,
+                                    fontSize = 14.5.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = TextPrimary,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                when {
-                                    isCompleted -> {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                imageVector = Icons.Filled.CheckCircle,
-                                                contentDescription = "Completed",
-                                                tint = PrimaryGreen,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = "Download complete • ${activeDownload?.formattedSize}",
-                                                fontSize = 13.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = PrimaryGreen
-                                            )
-                                        }
-                                    }
-                                    isFailed -> {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                imageVector = Icons.Filled.ErrorOutline,
-                                                contentDescription = "Failed",
-                                                tint = Color(0xFFDC2626),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = "Download failed",
-                                                fontSize = 13.sp,
-                                                color = Color(0xFFDC2626)
-                                            )
-                                        }
-                                    }
-                                    isDownloading -> {
-                                        val spd = activeDownload?.speed.orEmpty()
-                                        val queueInfo = if ((activeDownload?.queueTotal ?: 0) > 1) {
-                                            "Queue ${activeDownload?.queueIndex}/${activeDownload?.queueTotal} • "
-                                        } else ""
-                                        val statusStr = if (spd.isNotEmpty()) {
-                                            "${queueInfo}Downloading • $progressInt% ($spd)"
-                                        } else {
-                                            "${queueInfo}Downloading • $progressInt%"
-                                        }
-                                        Text(
-                                            text = statusStr,
-                                            fontSize = 13.sp,
-                                            color = TextSecondary
-                                        )
-                                    }
-                                    hasPreview -> {
-                                        Text(
-                                            text = "Ready to download • ${videoPreview?.duration}",
-                                            fontSize = 13.sp,
-                                            color = TextSecondary
-                                        )
-                                    }
-                                }
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = "Ready to download • ${preview.duration}",
+                                    fontSize = 12.5.sp,
+                                    color = TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
 
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
 
-                            // Action Button: Play for completed or Close/Cancel (X)
-                            if (isCompleted) {
-                                IconButton(
-                                    onClick = {
-                                        activeDownload?.let { dl ->
-                                            viewModel.playVideo(
-                                                DownloadEntity(
-                                                    id = dl.id,
-                                                    title = dl.title,
-                                                    fileName = dl.fileName,
-                                                    filePath = dl.filePath,
-                                                    thumbnailUri = dl.thumbnailUrl,
-                                                    duration = dl.duration,
-                                                    mediaType = dl.mediaType
-                                                )
-                                            )
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .size(34.dp)
-                                        .clip(CircleShape)
-                                        .background(PrimaryGreen)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PlayArrow,
-                                        contentDescription = "Play",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(4.dp))
-                                IconButton(
-                                    onClick = { viewModel.dismissActiveCard() },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Dismiss",
-                                        tint = TextSecondary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            } else {
-                                IconButton(
-                                    onClick = {
-                                        if (isDownloading) {
-                                            viewModel.cancelActiveDownload()
-                                        } else if (isFailed) {
-                                            viewModel.dismissActiveCard()
-                                        } else {
-                                            viewModel.clearPreview()
-                                        }
-                                    },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Cancel",
-                                        tint = TextSecondary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
+                            IconButton(
+                                onClick = { viewModel.clearPreview() },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Clear Preview",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
-                        }
-
-                        if (isDownloading) {
-                            Spacer(modifier = Modifier.height(14.dp))
-
-                            // Real Progress Bar
-                            LinearProgressIndicator(
-                                progress = { progressFloat },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(4.5.dp)
-                                    .clip(RoundedCornerShape(4.dp)),
-                                color = PrimaryGreen,
-                                trackColor = MintGreenLight,
-                            )
                         }
                     }
                 }
+            }
+
+            // 2. Multiple Independent Download Cards (Newest on Top)
+            downloadCards.forEach { download ->
+                DownloadItemCard(
+                    download = download,
+                    selectedFormatTab = selectedFormatTab,
+                    onPlay = { dl ->
+                        viewModel.playVideo(
+                            DownloadEntity(
+                                id = dl.id,
+                                title = dl.title,
+                                fileName = dl.fileName,
+                                filePath = dl.filePath,
+                                thumbnailUri = dl.thumbnailUrl,
+                                duration = dl.duration,
+                                mediaType = dl.mediaType
+                            )
+                        )
+                    },
+                    onDismiss = { id -> viewModel.dismissDownloadCard(id) },
+                    onCancel = { id -> viewModel.cancelDownload(id) }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
             }
         }
 
@@ -1077,81 +966,377 @@ fun FormatSelectionDialog(
         )
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Column {
-                Text(
-                    text = if (isAudio) "Select Audio Bitrate" else "Select Video Quality",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = TextPrimary
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = metadata.title,
-                    fontSize = 13.sp,
-                    color = TextSecondary,
-                    maxLines = 2
-                )
-            }
-        },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                formats.forEach { format ->
-                    val isChecked = format.formatId == selectedFormat.formatId && format.resolution == selectedFormat.resolution
-                    Row(
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) {
+                onDismiss()
+            },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        AnimatedVisibility(
+            visible = true,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) {}, // Consume clicks so tapping the sheet doesn't dismiss
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                color = CardSurface,
+                tonalElevation = 8.dp,
+                shadowElevation = 16.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                ) {
+                    // Drag Handle
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { selectedFormat = format }
-                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                            .padding(bottom = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(36.dp)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(TextSecondary.copy(alpha = 0.4f))
+                        )
+                    }
+
+                    // Title & Metadata
+                    Text(
+                        text = if (isAudio) "Select Audio Bitrate" else "Select Video Quality",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = metadata.title,
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Scrollable Quality Options List
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        formats.forEach { format ->
+                            val isChecked = format.formatId == selectedFormat.formatId && format.resolution == selectedFormat.resolution
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isChecked) PrimaryGreen.copy(alpha = 0.12f) else Color.Transparent)
+                                    .clickable { selectedFormat = format }
+                                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = isChecked,
+                                    onClick = { selectedFormat = format },
+                                    colors = RadioButtonDefaults.colors(selectedColor = PrimaryGreen)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = format.resolution,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 15.sp,
+                                        color = TextPrimary
+                                    )
+                                    val details = listOfNotNull(
+                                        format.note.takeIf { it.isNotBlank() },
+                                        format.filesizeApprox.takeIf { it.isNotBlank() }
+                                    ).joinToString(" • ")
+                                    if (details.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = details,
+                                            fontSize = 12.sp,
+                                            color = TextSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Action Buttons: [Cancel] & [Start Download]
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        RadioButton(
-                            selected = isChecked,
-                            onClick = { selectedFormat = format },
-                            colors = RadioButtonDefaults.colors(selectedColor = PrimaryGreen)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = format.resolution,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 14.sp,
-                                color = TextPrimary
-                            )
-                            val details = listOfNotNull(
-                                format.note.takeIf { it.isNotBlank() },
-                                format.filesizeApprox.takeIf { it.isNotBlank() }
-                            ).joinToString(" • ")
-                            if (details.isNotEmpty()) {
-                                Text(
-                                    text = details,
-                                    fontSize = 12.sp,
-                                    color = TextSecondary
-                                )
-                            }
+                        TextButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Cancel", color = TextSecondary, fontWeight = FontWeight.Medium)
+                        }
+
+                        Button(
+                            onClick = { onConfirm(selectedFormat) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Start Download", color = Color.White, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(selectedFormat) },
-                colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("Start Download", color = Color.White)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextSecondary)
-            }
-        },
+        }
+    }
+}
+
+@Composable
+fun DownloadItemCard(
+    download: ActiveDownloadState,
+    selectedFormatTab: String,
+    onPlay: (ActiveDownloadState) -> Unit,
+    onDismiss: (Long) -> Unit,
+    onCancel: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
         shape = RoundedCornerShape(16.dp),
-        containerColor = CardSurface
-    )
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("download_card_${download.id}")
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Thumbnail with Duration
+                Box(
+                    modifier = Modifier
+                        .size(width = 68.dp, height = 48.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF222222)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!download.thumbnailUrl.isNullOrEmpty()) {
+                        AsyncImage(
+                            model = download.thumbnailUrl,
+                            contentDescription = "Thumbnail",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (download.mediaType == "AUDIO" || selectedFormatTab == "MP3 Audio") Icons.Outlined.MusicNote else Icons.Outlined.Movie,
+                            contentDescription = "Media Icon",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    if (download.duration.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(2.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.Black.copy(alpha = 0.8f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = download.duration,
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                // Title & Status Line
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = download.title.ifEmpty { download.fileName },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    when {
+                        download.isCompleted -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = "Completed",
+                                    tint = PrimaryGreen,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Download Complete • ${download.formattedSize}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = PrimaryGreen,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        download.isFailed -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ErrorOutline,
+                                    contentDescription = "Failed",
+                                    tint = Color(0xFFDC2626),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Download failed",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFDC2626),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        download.isRunning -> {
+                            val spd = download.speed
+                            val queueInfo = if (download.queueTotal > 1) {
+                                "Queue ${download.queueIndex}/${download.queueTotal} • "
+                            } else ""
+                            val statusStr = if (spd.isNotEmpty() && spd != "Starting..." && spd != "Processing..." && spd != "Queued...") {
+                                "${queueInfo}Downloading • ${download.progress}% ($spd)"
+                            } else if (spd.isNotEmpty()) {
+                                "${queueInfo}$spd • ${download.progress}%"
+                            } else {
+                                "${queueInfo}Downloading • ${download.progress}%"
+                            }
+                            Text(
+                                text = statusStr,
+                                fontSize = 12.sp,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Actions: Play & Dismiss / Cancel
+                if (download.isCompleted) {
+                    IconButton(
+                        onClick = { onPlay(download) },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(PrimaryGreen)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = { onDismiss(download.id) },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else if (download.isFailed) {
+                    IconButton(
+                        onClick = { onDismiss(download.id) },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = { onCancel(download.id) },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cancel",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+
+            if (download.isRunning) {
+                Spacer(modifier = Modifier.height(10.dp))
+                val progressFloat = (download.progress / 100f).coerceIn(0f, 1f)
+                LinearProgressIndicator(
+                    progress = { progressFloat },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = PrimaryGreen,
+                    trackColor = MintGreenLight,
+                )
+            }
+        }
+    }
 }

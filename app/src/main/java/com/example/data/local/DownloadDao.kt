@@ -10,11 +10,17 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DownloadDao {
-    @Query("SELECT * FROM downloads ORDER BY timestamp DESC")
+    @Query("SELECT * FROM downloads WHERE status = 'COMPLETED' AND isPrivate = 0 AND fileSizeBytes > 0 ORDER BY timestamp DESC")
     fun getAllDownloads(): Flow<List<DownloadEntity>>
 
-    @Query("SELECT * FROM downloads WHERE mediaType = :type ORDER BY timestamp DESC")
+    @Query("SELECT * FROM downloads WHERE status = 'COMPLETED' AND isPrivate = 0 AND mediaType = :type AND fileSizeBytes > 0 ORDER BY timestamp DESC")
     fun getDownloadsByType(type: String): Flow<List<DownloadEntity>>
+
+    @Query("SELECT * FROM downloads WHERE status = 'COMPLETED' AND isPrivate = 1 AND fileSizeBytes > 0 ORDER BY timestamp DESC")
+    fun getPrivateDownloads(): Flow<List<DownloadEntity>>
+
+    @Query("SELECT * FROM downloads WHERE status = 'COMPLETED' AND fileSizeBytes > 0 ORDER BY timestamp DESC")
+    suspend fun getCompletedList(): List<DownloadEntity>
 
     @Query("SELECT * FROM downloads WHERE status = 'DOWNLOADING' ORDER BY timestamp DESC")
     fun getActiveDownloads(): Flow<List<DownloadEntity>>
@@ -22,7 +28,7 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
     suspend fun getDownloadById(id: Long): DownloadEntity?
 
-    @Query("SELECT COUNT(*) FROM downloads")
+    @Query("SELECT COUNT(*) FROM downloads WHERE status = 'COMPLETED' AND isPrivate = 0 AND fileSizeBytes > 0")
     suspend fun getCount(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

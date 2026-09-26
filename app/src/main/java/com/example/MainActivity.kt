@@ -1,10 +1,11 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,13 +26,14 @@ import com.example.ui.theme.AppBackground
 import com.example.ui.theme.StreamCleanTheme
 import com.example.ui.viewmodel.MainViewModel
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIntent(intent)
 
         setContent {
             val appearance by viewModel.appearance.collectAsState()
@@ -46,6 +48,23 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        val tab = intent?.getStringExtra(EXTRA_NAVIGATE_TAB)
+        if (tab == "DOWNLOADS") {
+            viewModel.selectTab(StreamCleanTab.DOWNLOADS)
+        }
+    }
+
+    companion object {
+        const val EXTRA_NAVIGATE_TAB = "extra_navigate_tab"
+    }
 }
 
 @Composable
@@ -56,9 +75,10 @@ fun StreamCleanMainApp(
     val currentTab by viewModel.currentTab.collectAsState()
     val playingVideo by viewModel.playingVideo.collectAsState()
     val socialUrl by viewModel.socialUrl.collectAsState()
+    val showingPrivateFiles by viewModel.showingPrivateFiles.collectAsState()
 
     // Handle back button to return to home tab when in other tabs
-    androidx.activity.compose.BackHandler(enabled = currentTab != StreamCleanTab.DOWNLOAD && playingVideo == null && socialUrl == null) {
+    androidx.activity.compose.BackHandler(enabled = currentTab != StreamCleanTab.DOWNLOAD && playingVideo == null && socialUrl == null && !showingPrivateFiles) {
         viewModel.selectTab(StreamCleanTab.DOWNLOAD)
     }
 

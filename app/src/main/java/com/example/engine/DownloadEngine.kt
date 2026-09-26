@@ -69,6 +69,7 @@ data class VideoMetadata(
 
 data class ActiveDownloadState(
     val id: Long = 0,
+    val url: String = "",
     val title: String = "",
     val fileName: String = "",
     val progress: Int = 0,
@@ -93,11 +94,25 @@ class DownloadEngine private constructor(private val context: Context) {
     private val mutex = Mutex()
     private val downloadChannel = Channel<DownloadTask>(Channel.UNLIMITED)
 
+    private val _downloadCards = MutableStateFlow<List<ActiveDownloadState>>(emptyList())
+    val downloadCards: StateFlow<List<ActiveDownloadState>> = _downloadCards.asStateFlow()
+
     private val _activeDownload = MutableStateFlow<ActiveDownloadState?>(null)
     val activeDownload: StateFlow<ActiveDownloadState?> = _activeDownload.asStateFlow()
 
     private var currentProcessId: String? = null
     private var isCancelled = false
+    private var currentRunningTaskId: Long? = null
+
+    private fun updateCard(id: Long, transform: (ActiveDownloadState) -> ActiveDownloadState) {
+        _downloadCards.value = _downloadCards.value.map {
+            if (it.id == id) transform(it) else it
+        }
+        val current = _activeDownload.value
+        if (current != null && current.id == id) {
+            _activeDownload.value = transform(current)
+        }
+    }
 
     private val initMutex = Mutex()
     @Volatile
@@ -337,6 +352,26 @@ class DownloadEngine private constructor(private val context: Context) {
         queueTotal: Int = 0,
         repository: DownloadRepository
     ) {
+        val initialCard = ActiveDownloadState(
+            id = entityId,
+            url = url,
+            title = title,
+            fileName = "",
+            progress = 0,
+            speed = "Queued...",
+            eta = "",
+            isRunning = true,
+            isCompleted = false,
+            isFailed = false,
+            thumbnailUrl = thumbnailUrl,
+            duration = duration,
+            mediaType = mediaType,
+            queueIndex = queueIndex,
+            queueTotal = queueTotal
+        )
+        _downloadCards.value = listOf(initialCard) + _downloadCards.value.filter { it.id != entityId }
+        _activeDownload.value = initialCard
+
         val task = DownloadTask(
             entityId = entityId,
             url = url,
@@ -362,26 +397,28 @@ class DownloadEngine private constructor(private val context: Context) {
         val outputFile = File(downloadDir, safeFileName)
         val processId = "dl_${task.entityId}_${System.currentTimeMillis()}"
         currentProcessId = processId
+        currentRunningTaskId = task.entityId
         isCancelled = false
 
         // Cache thumbnail locally so offline viewing in Downloads tab has reliable original art
         val localThumbPath = cacheThumbnailLocally(task.thumbnailUrl, safeTitle)
 
-        _activeDownload.value = ActiveDownloadState(
-            id = task.entityId,
-            title = task.title,
-            fileName = safeFileName,
-            progress = 0,
-            speed = "Starting...",
-            eta = "",
-            isRunning = true,
-            isCompleted = false,
-            thumbnailUrl = localThumbPath ?: task.thumbnailUrl,
-            duration = task.duration,
-            mediaType = task.mediaType,
-            queueIndex = task.queueIndex,
-            queueTotal = task.queueTotal
-        )
+        updateCard(task.entityId) {
+            it.copy(
+                fileName = safeFileName,
+                progress = 0,
+                speed = "Starting...",
+                eta = "",
+                isRunning = true,
+                isCompleted = false,
+                isFailed = false,
+                thumbnailUrl = localThumbPath ?: task.thumbnailUrl,
+                duration = task.duration,
+                mediaType = task.mediaType,
+                queueIndex = task.queueIndex,
+                queueTotal = task.queueTotal
+            )
+        }
 
         try {
             val sanitizedUrl = sanitizeUrlInput(task.url)
@@ -455,11 +492,13 @@ class DownloadEngine private constructor(private val context: Context) {
                     if (!isCancelled) {
                         val p = progress.toInt().coerceIn(0, 100)
                         val spd = extractSpeed(line)
-                        _activeDownload.value = _activeDownload.value?.copy(
-                            progress = p,
-                            speed = if (p >= 100) "Processing..." else spd,
-                            eta = if (etaInSeconds > 0 && p < 100) "${etaInSeconds}s" else ""
-                        )
+                        updateCard(task.entityId) { card ->
+                            card.copy(
+                                progress = p,
+                                speed = if (p >= 100) "Processing..." else spd,
+                                eta = if (etaInSeconds > 0 && p < 100) "${etaInSeconds}s" else ""
+                            )
+                        }
                     }
                 }
             }
@@ -488,7 +527,7 @@ class DownloadEngine private constructor(private val context: Context) {
                 val formattedSize = formatFileSize(fileSize)
                 val finalThumb = localThumbPath ?: task.thumbnailUrl
 
-                val updatedEntity = DownloadEntity(
+                val completedEntity = DownloadEntity(
                     id = task.entityId,
                     url = task.url,
                     title = task.title,
@@ -505,28 +544,37 @@ class DownloadEngine private constructor(private val context: Context) {
                     relativeDate = "Today",
                     timestamp = System.currentTimeMillis()
                 )
-                task.repository.updateDownload(updatedEntity)
+                // Persist strictly upon verified completion
+                task.repository.insertOrUpdateDownload(completedEntity)
                 Log.i(TAG, "Download finished successfully and verified: ${actualFile.name} ($formattedSize)")
 
-                // Update active state to successful completed state with checkmark info
-                _activeDownload.value = ActiveDownloadState(
-                    id = task.entityId,
-                    title = task.title,
-                    fileName = actualFile.name,
-                    progress = 100,
-                    speed = "",
-                    eta = "",
-                    isRunning = false,
-                    isCompleted = true,
-                    isFailed = false,
-                    thumbnailUrl = finalThumb,
-                    duration = task.duration,
-                    formattedSize = formattedSize,
-                    filePath = actualFile.absolutePath,
-                    mediaType = task.mediaType,
-                    queueIndex = task.queueIndex,
-                    queueTotal = task.queueTotal
+                // Trigger background notification if app is in background/closed
+                com.example.util.NotificationHelper.showDownloadCompleteNotification(
+                    context = context,
+                    title = "Download Complete",
+                    body = "Video download successful. Please check the Downloads section."
                 )
+
+                // Update card state to successful completed state
+                updateCard(task.entityId) {
+                    it.copy(
+                        title = task.title,
+                        fileName = actualFile.name,
+                        progress = 100,
+                        speed = "",
+                        eta = "",
+                        isRunning = false,
+                        isCompleted = true,
+                        isFailed = false,
+                        thumbnailUrl = finalThumb,
+                        duration = task.duration,
+                        formattedSize = formattedSize,
+                        filePath = actualFile.absolutePath,
+                        mediaType = task.mediaType,
+                        queueIndex = task.queueIndex,
+                        queueTotal = task.queueTotal
+                    )
+                }
             } else {
                 Log.e(TAG, "Output validation failed for ${task.title}. Marking as FAILED.")
                 if (actualFile.exists() && actualFile.length() == 0L) {
@@ -544,47 +592,57 @@ class DownloadEngine private constructor(private val context: Context) {
         } finally {
             cleanupTempFiles(downloadDir, safeFileName)
             currentProcessId = null
+            currentRunningTaskId = null
+        }
+    }
+
+    fun dismissCard(id: Long) {
+        _downloadCards.value = _downloadCards.value.filter { it.id != id }
+        if (_activeDownload.value?.id == id) {
+            _activeDownload.value = _downloadCards.value.firstOrNull { it.isRunning }
         }
     }
 
     fun dismissActiveCard() {
-        _activeDownload.value = null
+        val top = _downloadCards.value.firstOrNull()
+        if (top != null) {
+            dismissCard(top.id)
+        } else {
+            _activeDownload.value = null
+        }
+    }
+
+    fun cancelDownload(id: Long) {
+        if (currentRunningTaskId == id) {
+            cancelActiveDownload()
+        }
+        dismissCard(id)
     }
 
     private suspend fun markTaskFailed(task: DownloadTask, fileName: String, errorReason: String) {
-        val failedEntity = DownloadEntity(
-            id = task.entityId,
-            url = task.url,
-            title = task.title,
-            fileName = fileName,
-            filePath = "",
-            fileSizeBytes = 0L,
-            formattedSize = "0 MB",
-            duration = task.duration,
-            thumbnailUri = task.thumbnailUrl,
-            mediaType = task.mediaType,
-            resolution = task.resolution,
-            status = "FAILED",
-            progress = 0,
-            relativeDate = "Today",
-            timestamp = System.currentTimeMillis()
-        )
-        task.repository.updateDownload(failedEntity)
-        _activeDownload.value = ActiveDownloadState(
-            id = task.entityId,
-            title = task.title,
-            fileName = fileName,
-            progress = 0,
-            isRunning = false,
-            isCompleted = false,
-            isFailed = true,
-            errorMessage = errorReason,
-            thumbnailUrl = task.thumbnailUrl,
-            duration = task.duration,
-            mediaType = task.mediaType,
-            queueIndex = task.queueIndex,
-            queueTotal = task.queueTotal
-        )
+        // Ensure failed tasks are NEVER stored in persistent Downloads
+        try {
+            task.repository.deleteById(task.entityId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error cleaning failed download entity from DB: ${e.message}")
+        }
+        updateCard(task.entityId) {
+            it.copy(
+                fileName = fileName,
+                progress = 0,
+                speed = "",
+                eta = "",
+                isRunning = false,
+                isCompleted = false,
+                isFailed = true,
+                errorMessage = errorReason,
+                thumbnailUrl = task.thumbnailUrl,
+                duration = task.duration,
+                mediaType = task.mediaType,
+                queueIndex = task.queueIndex,
+                queueTotal = task.queueTotal
+            )
+        }
         Log.w(TAG, "Task marked as FAILED for ${task.title}: $errorReason")
     }
 
@@ -592,10 +650,15 @@ class DownloadEngine private constructor(private val context: Context) {
         cleanupTempFiles(downloadDir, safeFileName)
         val file = File(downloadDir, safeFileName)
         if (file.exists()) file.delete()
-        task.repository.deleteDownload(
-            DownloadEntity(id = task.entityId, title = task.title, fileName = safeFileName)
-        )
-        _activeDownload.value = null
+        try {
+            task.repository.deleteById(task.entityId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error deleting cancelled task from DB: ${e.message}")
+        }
+        _downloadCards.value = _downloadCards.value.filter { it.id != task.entityId }
+        if (_activeDownload.value?.id == task.entityId) {
+            _activeDownload.value = _downloadCards.value.firstOrNull { it.isRunning }
+        }
     }
 
     private suspend fun runDirectDownload(urlStr: String, targetFile: File): Boolean = withContext(Dispatchers.IO) {

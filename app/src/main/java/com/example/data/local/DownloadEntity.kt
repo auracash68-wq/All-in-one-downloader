@@ -20,5 +20,6 @@ data class DownloadEntity(
     val status: String = "COMPLETED", // "PENDING", "DOWNLOADING", "COMPLETED", "FAILED", "PAUSED"
     val progress: Int = 100,
     val relativeDate: String = "Today",
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val isPrivate: Boolean = false
 )

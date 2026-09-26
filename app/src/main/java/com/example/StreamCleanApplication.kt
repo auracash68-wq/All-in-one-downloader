@@ -33,8 +33,9 @@ class StreamCleanApplication : Application() {
         repository = DownloadRepository(this, database.downloadDao())
         settingsManager = SettingsManager(this)
 
-        // Create Notification Channel for downloads
+        // Create Notification Channels for downloads & completions
         createNotificationChannel()
+        com.example.util.NotificationHelper.createNotificationChannels(this)
     }
 
     private fun createNotificationChannel() {
