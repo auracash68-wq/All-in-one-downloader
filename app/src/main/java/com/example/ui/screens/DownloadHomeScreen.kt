@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import com.example.ui.components.SocialMediaButton
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -300,6 +303,30 @@ fun DownloadHomeScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Social Media Shortcut Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                SocialMediaButton(
+                    icon = painterResource(id = R.drawable.ic_social_facebook),
+                    label = "Facebook",
+                    onClick = { viewModel.openSocialUrl("https://www.facebook.com") }
+                )
+                SocialMediaButton(
+                    icon = painterResource(id = R.drawable.ic_social_youtube),
+                    label = "YouTube",
+                    onClick = { viewModel.openSocialUrl("https://www.youtube.com") }
+                )
+                SocialMediaButton(
+                    icon = painterResource(id = R.drawable.ic_social_instagram),
+                    label = "Instagram",
+                    onClick = { viewModel.openSocialUrl("https://www.instagram.com") }
+                )
             }
 
             Spacer(modifier = Modifier.height(14.dp))

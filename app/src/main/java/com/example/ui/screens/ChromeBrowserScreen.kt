@@ -76,12 +76,14 @@ import com.example.ui.viewmodel.MainViewModel
 @Composable
 fun ChromeBrowserScreen(
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    initialUrl: String? = null,
+    onBack: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
-    var currentUrl by remember { mutableStateOf("https://www.google.com") }
-    var inputUrlText by remember { mutableStateOf("https://www.google.com") }
+    var currentUrl by remember { mutableStateOf(initialUrl ?: "https://www.google.com") }
+    var inputUrlText by remember { mutableStateOf(initialUrl ?: "https://www.google.com") }
     var pageTitle by remember { mutableStateOf("Google") }
     var pageProgress by remember { mutableFloatStateOf(0f) }
     var isLoading by remember { mutableStateOf(false) }
@@ -89,8 +91,12 @@ fun ChromeBrowserScreen(
     var canGoForward by remember { mutableStateOf(false) }
 
     // Intercept hardware back button to navigate back in web history
-    BackHandler(enabled = canGoBack) {
-        webViewInstance?.goBack()
+    BackHandler(enabled = true) {
+        if (canGoBack) {
+            webViewInstance?.goBack()
+        } else {
+            onBack?.invoke()
+        }
     }
 
     fun navigateTo(queryOrUrl: String) {

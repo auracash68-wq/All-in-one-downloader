@@ -113,6 +113,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _browserUrl = MutableStateFlow("https://www.google.com")
     val browserUrl: StateFlow<String> = _browserUrl.asStateFlow()
 
+    // Social Media WebView state
+    private val _socialUrl = MutableStateFlow<String?>(null)
+    val socialUrl: StateFlow<String?> = _socialUrl.asStateFlow()
+
+    fun openSocialUrl(url: String) {
+        _socialUrl.value = url
+    }
+
+    fun closeSocialWebView() {
+        _socialUrl.value = null
+    }
+
     // Preferences
     val downloadLocation = settingsManager.downloadLocation
     val wifiOnly = settingsManager.wifiOnly

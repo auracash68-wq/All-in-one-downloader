@@ -55,9 +55,10 @@ fun StreamCleanMainApp(
 ) {
     val currentTab by viewModel.currentTab.collectAsState()
     val playingVideo by viewModel.playingVideo.collectAsState()
+    val socialUrl by viewModel.socialUrl.collectAsState()
 
     // Handle back button to return to home tab when in other tabs
-    androidx.activity.compose.BackHandler(enabled = currentTab != StreamCleanTab.DOWNLOAD && playingVideo == null) {
+    androidx.activity.compose.BackHandler(enabled = currentTab != StreamCleanTab.DOWNLOAD && playingVideo == null && socialUrl == null) {
         viewModel.selectTab(StreamCleanTab.DOWNLOAD)
     }
 
@@ -66,28 +67,38 @@ fun StreamCleanMainApp(
             .fillMaxSize()
             .background(AppBackground)
     ) {
-        Scaffold(
-            bottomBar = {
-                // Hide bottom nav when video player is full screen
-                if (playingVideo == null) {
-                    StreamCleanBottomNav(
-                        currentTab = currentTab,
-                        onTabSelected = { tab -> viewModel.selectTab(tab) }
-                    )
-                }
-            },
-            containerColor = AppBackground
-        ) { paddingValues ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-            ) {
-                when (currentTab) {
-                    StreamCleanTab.DOWNLOAD -> DownloadHomeScreen(viewModel = viewModel)
-                    StreamCleanTab.DOWNLOADS -> DownloadsScreen(viewModel = viewModel)
-                    StreamCleanTab.BROWSER -> ChromeBrowserScreen(viewModel = viewModel)
-                    StreamCleanTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
+        // Show Social WebView if active
+        if (socialUrl != null) {
+            ChromeBrowserScreen(
+                viewModel = viewModel,
+                initialUrl = socialUrl,
+                onBack = { viewModel.closeSocialWebView() },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Scaffold(
+                bottomBar = {
+                    // Hide bottom nav when video player is full screen
+                    if (playingVideo == null) {
+                        StreamCleanBottomNav(
+                            currentTab = currentTab,
+                            onTabSelected = { tab -> viewModel.selectTab(tab) }
+                        )
+                    }
+                },
+                containerColor = AppBackground
+            ) { paddingValues ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                ) {
+                    when (currentTab) {
+                        StreamCleanTab.DOWNLOAD -> DownloadHomeScreen(viewModel = viewModel)
+                        StreamCleanTab.DOWNLOADS -> DownloadsScreen(viewModel = viewModel)
+                        StreamCleanTab.BROWSER -> ChromeBrowserScreen(viewModel = viewModel)
+                        StreamCleanTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
+                    }
                 }
             }
         }
