@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.components.StreamCleanBottomNav
 import com.example.ui.components.StreamCleanTab
 import com.example.ui.screens.ChromeBrowserScreen
@@ -22,6 +23,7 @@ import com.example.ui.screens.DownloadHomeScreen
 import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.VideoPlayerScreen
+import androidx.compose.ui.graphics.Color
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.StreamCleanTheme
 import com.example.ui.viewmodel.MainViewModel
@@ -85,8 +87,9 @@ fun StreamCleanMainApp(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppBackground)
     ) {
+        AppPremiumBackgroundCanvas()
+
         // Show Social WebView if active
         if (socialUrl != null) {
             ChromeBrowserScreen(
@@ -106,7 +109,7 @@ fun StreamCleanMainApp(
                         )
                     }
                 },
-                containerColor = AppBackground
+                containerColor = Color.Transparent
             ) { paddingValues ->
                 Box(
                     modifier = Modifier

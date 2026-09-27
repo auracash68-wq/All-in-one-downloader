@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import com.example.ui.components.SocialMediaButton
 import androidx.compose.ui.res.painterResource
 import com.example.R
@@ -85,6 +86,8 @@ import com.example.data.local.DownloadEntity
 import com.example.engine.ActiveDownloadState
 import com.example.engine.VideoFormatInfo
 import com.example.engine.VideoMetadata
+import com.example.ui.components.AppPremiumBackgroundCanvas
+import com.example.ui.components.ScreenBackground
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -120,10 +123,9 @@ fun DownloadHomeScreen(
 
     val scrollState = rememberScrollState()
 
-    Box(
+    ScreenBackground(
+        backgroundResId = R.drawable.download_background,
         modifier = modifier
-            .fillMaxSize()
-            .background(AppBackground)
     ) {
         Column(
             modifier = Modifier

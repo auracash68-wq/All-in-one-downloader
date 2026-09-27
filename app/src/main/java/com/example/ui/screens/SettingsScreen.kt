@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -48,12 +49,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.preferences.SettingsManager
+import com.example.ui.components.AppPremiumBackgroundCanvas
+import com.example.ui.components.ScreenBackground
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -84,10 +90,9 @@ fun SettingsScreen(
 
     val scrollState = rememberScrollState()
 
-    Box(
+    ScreenBackground(
+        backgroundResId = R.drawable.settings_background,
         modifier = modifier
-            .fillMaxSize()
-            .background(AppBackground)
     ) {
         Column(
             modifier = Modifier

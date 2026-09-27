@@ -204,26 +204,32 @@ class DownloadEngine private constructor(private val context: Context) {
             addOption("--no-warnings")
             addOption("--no-update")
             addOption("--no-check-certificates")
-            if (isDailymotionUrl(sanitized)) {
+            addOption("--geo-bypass")
+            if (isYouTubeUrl(sanitized)) {
+                addOption("--extractor-args", "youtube:player_client=android,web,web_creator,mweb")
+                addOption("--user-agent", "Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0")
+            } else if (isDailymotionUrl(sanitized)) {
                 addOption("--referer", "https://www.dailymotion.com/")
                 addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
             } else if (isBilibiliUrl(sanitized)) {
                 addOption("--referer", "https://www.bilibili.com/")
                 addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+            } else {
+                addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
             }
         }
 
-        val videoInfo: VideoInfo = try {
+        val videoInfo: VideoInfo? = try {
             YoutubeDL.getInstance().getInfo(request)
         } catch (e: Throwable) {
-            Log.e(TAG, "YoutubeDL getInfo failed for $sanitized: ${e.message}")
-            throw e
+            Log.w(TAG, "YoutubeDL getInfo failed for $sanitized: ${e.message}. Using resilient fallback.")
+            null
         }
 
-        var title = videoInfo.title?.takeIf { it.isNotBlank() }
-        var thumb = videoInfo.thumbnail?.takeIf { it.isNotBlank() }
+        var title = videoInfo?.title?.takeIf { it.isNotBlank() }
+        var thumb = videoInfo?.thumbnail?.takeIf { it.isNotBlank() }
 
-        // Supplemental oEmbed lookup if needed
+        // Supplemental oEmbed lookup if needed or if getInfo was blocked by anti-bot verification
         if ((title == null || thumb == null) && isYouTubeUrl(sanitized)) {
             val supplemental = fetchOEmbedSupplemental(sanitized)
             if (supplemental != null) {
@@ -234,18 +240,33 @@ class DownloadEngine private constructor(private val context: Context) {
                     thumb = supplemental.second
                 }
             }
+            if (thumb == null) {
+                val ytId = extractYouTubeVideoId(sanitized)
+                if (!ytId.isNullOrEmpty()) {
+                    thumb = "https://img.youtube.com/vi/$ytId/hqdefault.jpg"
+                }
+            }
         }
 
         val finalTitle = title ?: generateFallbackTitle(sanitized)
-        val durationSecs = videoInfo.duration
+        val durationSecs = videoInfo?.duration ?: 0
         val durationStr = formatDuration(durationSecs)
 
         // Parse video formats strictly applying the 144p to 720p policy
-        val videoFormats = parseVideoFormats(videoInfo.formats, durationSecs)
-        // Parse audio formats without the 144p-720p restriction
-        val audioFormats = parseAudioFormats(videoInfo.formats, durationSecs)
+        val videoFormats = if (videoInfo != null) {
+            parseVideoFormats(videoInfo.formats, durationSecs)
+        } else {
+            generateDefaultVideoFormats(durationSecs)
+        }
 
-        Log.d(TAG, "Fetched real formats via YoutubeDL: '$finalTitle', duration: $durationStr, video formats (144p-720p): ${videoFormats.size}, audio formats: ${audioFormats.size}")
+        // Parse audio formats without the 144p-720p restriction
+        val audioFormats = if (videoInfo != null) {
+            parseAudioFormats(videoInfo.formats, durationSecs)
+        } else {
+            parseAudioFormats(null, durationSecs)
+        }
+
+        Log.d(TAG, "Fetched formats: '$finalTitle', duration: $durationStr, video formats: ${videoFormats.size}, audio formats: ${audioFormats.size}")
 
         return@withContext VideoMetadata(
             title = finalTitle,
@@ -259,6 +280,54 @@ class DownloadEngine private constructor(private val context: Context) {
 
     private fun isYouTubeUrl(url: String): Boolean {
         return url.contains("youtu.be", ignoreCase = true) || url.contains("youtube.com", ignoreCase = true)
+    }
+
+    private fun extractYouTubeVideoId(url: String): String? {
+        return try {
+            if (url.contains("/shorts/")) {
+                url.substringAfter("/shorts/").substringBefore("?").substringBefore("/").trim()
+            } else if (url.contains("youtu.be/")) {
+                url.substringAfter("youtu.be/").substringBefore("?").substringBefore("/").trim()
+            } else if (url.contains("v=")) {
+                url.substringAfter("v=").substringBefore("&").substringBefore("/").trim()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun generateDefaultVideoFormats(durationSecs: Int): List<VideoFormatInfo> {
+        val presets = listOf(
+            Triple("720p", "720p (HD)", "High Quality • MP4"),
+            Triple("480p", "480p (SD)", "Standard Quality • MP4"),
+            Triple("360p", "360p (Fast)", "Fast Download • MP4"),
+            Triple("144p", "144p (Very Low)", "Data Saver • MP4")
+        )
+        return presets.map { (fmtId, title, note) ->
+            val height = fmtId.replace("p", "").toIntOrNull() ?: 720
+            val estKbps = when (height) {
+                720 -> 1800
+                480 -> 900
+                360 -> 500
+                else -> 150
+            }
+            val approxBytes = if (durationSecs > 0) {
+                (durationSecs.toLong() * estKbps * 1000L) / 8L
+            } else {
+                (120L * estKbps * 1000L) / 8L
+            }
+            VideoFormatInfo(
+                formatId = fmtId,
+                resolution = title,
+                note = note,
+                ext = "mp4",
+                filesizeApprox = "~${formatFileSize(approxBytes)}",
+                isAudio = false,
+                isHdr = false
+            )
+        }
     }
 
     private fun isDailymotionUrl(url: String): Boolean {
@@ -442,7 +511,11 @@ class DownloadEngine private constructor(private val context: Context) {
                     addOption("--no-warnings")
                     addOption("--no-update")
                     addOption("--no-check-certificates")
-                    if (isDailymotionUrl(sanitizedUrl)) {
+                    addOption("--geo-bypass")
+                    if (isYouTubeUrl(sanitizedUrl)) {
+                        addOption("--extractor-args", "youtube:player_client=android,web,web_creator,mweb")
+                        addOption("--user-agent", "Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0")
+                    } else if (isDailymotionUrl(sanitizedUrl)) {
                         addOption("--referer", "https://www.dailymotion.com/")
                         addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
                     } else if (isBilibiliUrl(sanitizedUrl)) {
@@ -451,6 +524,7 @@ class DownloadEngine private constructor(private val context: Context) {
                     } else {
                         // Concurrency optimization for high download speed without server throttling
                         addOption("-N", "4")
+                        addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
                     }
                     addOption("--buffer-size", "64k")
                     addOption("--retries", "3")

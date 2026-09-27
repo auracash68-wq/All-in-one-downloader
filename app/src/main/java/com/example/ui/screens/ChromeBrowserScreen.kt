@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -138,8 +139,8 @@ fun ChromeBrowserScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppBackground)
     ) {
+        AppPremiumBackgroundCanvas()
         Column(modifier = Modifier.fillMaxSize()) {
             // Chrome-Style Omnibox Top Bar
             Column(
@@ -280,6 +281,8 @@ fun ChromeBrowserScreen(
                             settings.setSupportZoom(true)
                             settings.builtInZoomControls = true
                             settings.displayZoomControls = false
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
 
                             webChromeClient = object : WebChromeClient() {
                                 override fun onProgressChanged(view: WebView?, newProgress: Int) {

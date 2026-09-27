@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.local.DownloadEntity
+import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -86,8 +87,8 @@ fun PrivateFilesScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(AppBackground)
     ) {
+        AppPremiumBackgroundCanvas()
         Column(
             modifier = Modifier
                 .fillMaxSize()
