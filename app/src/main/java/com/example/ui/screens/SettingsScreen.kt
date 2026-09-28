@@ -60,6 +60,7 @@ import com.example.R
 import com.example.data.preferences.SettingsManager
 import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.components.ScreenBackground
+import dev.chrisbanes.haze.HazeState
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -76,7 +77,8 @@ import com.example.ui.viewmodel.MainViewModel
 @Composable
 fun SettingsScreen(
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
     val appearance by viewModel.appearance.collectAsState()
@@ -92,13 +94,15 @@ fun SettingsScreen(
 
     ScreenBackground(
         backgroundResId = R.drawable.settings_background,
-        modifier = modifier
+        modifier = modifier,
+        hazeState = hazeState
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(bottom = 80.dp)
         ) {
             // Header: "Settings" + Subtitle
             Text(

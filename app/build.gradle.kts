@@ -111,6 +111,8 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
+  implementation("dev.chrisbanes.haze:haze:1.6.0")
+  implementation("dev.chrisbanes.haze:haze-materials:1.6.0")
   implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
   implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
   // implementation("io.github.junkfood02.youtubedl-android:aria2c:0.18.1")

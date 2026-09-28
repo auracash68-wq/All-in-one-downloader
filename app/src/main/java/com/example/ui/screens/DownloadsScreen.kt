@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
@@ -56,6 +58,7 @@ import com.example.R
 import com.example.data.local.DownloadEntity
 import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.components.ScreenBackground
+import dev.chrisbanes.haze.HazeState
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -71,7 +74,8 @@ import com.example.ui.viewmodel.MainViewModel
 @Composable
 fun DownloadsScreen(
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
     val showingPrivateFiles by viewModel.showingPrivateFiles.collectAsState()
@@ -89,15 +93,19 @@ fun DownloadsScreen(
     val selectedFilter by viewModel.filterMediaType.collectAsState()
 
     val fileCountText = "${filteredDownloads.size} files"
+    val scrollState = rememberScrollState()
 
     ScreenBackground(
         backgroundResId = R.drawable.downloads_background,
-        modifier = modifier
+        modifier = modifier,
+        hazeState = hazeState
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(bottom = 80.dp)
         ) {
             // Header Row: "Downloads" title + "Private Files" button + count badge on right
             Row(

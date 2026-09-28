@@ -78,6 +78,8 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.MainViewModel
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -85,7 +87,8 @@ fun ChromeBrowserScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
     initialUrl: String? = null,
-    onBack: (() -> Unit)? = null
+    onBack: (() -> Unit)? = null,
+    hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
@@ -136,9 +139,14 @@ fun ChromeBrowserScreen(
         webViewInstance?.loadUrl(target)
     }
 
+    val boxModifier = if (hazeState != null) {
+        modifier.fillMaxSize().hazeSource(state = hazeState)
+    } else {
+        modifier.fillMaxSize()
+    }
+
     Box(
-        modifier = modifier
-            .fillMaxSize()
+        modifier = boxModifier
     ) {
         AppPremiumBackgroundCanvas()
         Column(modifier = Modifier.fillMaxSize()) {

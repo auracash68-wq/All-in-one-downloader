@@ -89,6 +89,7 @@ import com.example.engine.VideoMetadata
 import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.components.ScreenBackground
 import com.example.ui.theme.AppBackground
+import dev.chrisbanes.haze.HazeState
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.MintGreenLight
@@ -103,7 +104,8 @@ import com.example.ui.viewmodel.MainViewModel
 @Composable
 fun DownloadHomeScreen(
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
     val urlInput by viewModel.urlInput.collectAsState()
@@ -125,13 +127,15 @@ fun DownloadHomeScreen(
 
     ScreenBackground(
         backgroundResId = R.drawable.download_background,
-        modifier = modifier
+        modifier = modifier,
+        hazeState = hazeState
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(bottom = 80.dp)
         ) {
             // Screen Title & Subtitle
             Text(
