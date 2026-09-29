@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -68,6 +69,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.ui.components.AppPremiumBackgroundCanvas
+import com.example.ui.localization.LocalAppStrings
+import com.example.ui.theme.LocalStreamCleanDark
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
 import com.example.ui.theme.CardSurface
@@ -148,13 +151,14 @@ fun ChromeBrowserScreen(
     Box(
         modifier = boxModifier
     ) {
-        AppPremiumBackgroundCanvas()
+        AppPremiumBackgroundCanvas(isDark = LocalStreamCleanDark.current)
         Column(modifier = Modifier.fillMaxSize()) {
             // Chrome-Style Omnibox Top Bar
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(CardSurface)
+                    .statusBarsPadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Row(

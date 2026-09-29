@@ -36,6 +36,20 @@ class StreamCleanApplication : Application() {
         // Create Notification Channels for downloads & completions
         createNotificationChannel()
         com.example.util.NotificationHelper.createNotificationChannels(this)
+
+        // Ensure WebView cache directories exist to prevent first-launch filesystem warnings
+        try {
+            val webViewCacheDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js")
+            if (!webViewCacheDir.exists()) {
+                webViewCacheDir.mkdirs()
+            }
+            val wasmCacheDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm")
+            if (!wasmCacheDir.exists()) {
+                wasmCacheDir.mkdirs()
+            }
+        } catch (e: Exception) {
+            // Non-fatal directory initialization
+        }
     }
 
     private fun createNotificationChannel() {

@@ -16,9 +16,12 @@ class SettingsManager(context: Context) {
     )
     val appearance: StateFlow<String> = _appearance.asStateFlow()
 
-    private val _language = MutableStateFlow(
-        prefs.getString(KEY_LANGUAGE, "English") ?: "English"
-    )
+    private val initialLanguage: String = run {
+        val saved = prefs.getString(KEY_LANGUAGE, "English") ?: "English"
+        if (saved in SUPPORTED_LANGUAGES) saved else "English"
+    }
+
+    private val _language = MutableStateFlow(initialLanguage)
     val language: StateFlow<String> = _language.asStateFlow()
 
     private val _notificationsEnabled = MutableStateFlow(prefs.getBoolean(KEY_NOTIFICATIONS, true))
@@ -35,10 +38,11 @@ class SettingsManager(context: Context) {
     }
 
     fun setLanguage(lang: String) {
-        prefs.edit().putString(KEY_LANGUAGE, lang).apply()
-        _language.value = lang
+        val safeLang = if (lang in SUPPORTED_LANGUAGES) lang else "English"
+        prefs.edit().putString(KEY_LANGUAGE, safeLang).apply()
+        _language.value = safeLang
 
-        val tag = getLanguageTag(lang)
+        val tag = getLanguageTag(safeLang)
         try {
             AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(tag))
         } catch (e: Exception) {
@@ -50,30 +54,22 @@ class SettingsManager(context: Context) {
         const val KEY_APPEARANCE = "key_appearance"
         const val KEY_LANGUAGE = "key_language"
         const val KEY_NOTIFICATIONS = "key_notifications"
-        const val APP_VERSION = "2.4.0 (Build 2408)"
+        const val APP_VERSION = "StreamClean V1.0.0"
+
+        val SUPPORTED_LANGUAGES = listOf("English", "বাংলা", "हिन्दी")
 
         fun getLanguageTag(language: String): String {
             return when (language) {
-                "Español" -> "es"
-                "Français" -> "fr"
-                "Deutsch" -> "de"
                 "বাংলা" -> "bn"
                 "हिन्दी" -> "hi"
-                "العربية" -> "ar"
-                "日本語" -> "ja"
                 else -> "en"
             }
         }
 
         fun getLanguageCodeDisplay(language: String): String {
             return when (language) {
-                "Español" -> "ES"
-                "Français" -> "FR"
-                "Deutsch" -> "DE"
                 "বাংলা" -> "BN"
                 "हिन्दी" -> "HI"
-                "العربية" -> "AR"
-                "日本語" -> "JA"
                 else -> "EN"
             }
         }

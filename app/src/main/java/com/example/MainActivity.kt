@@ -11,12 +11,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -25,12 +25,14 @@ import androidx.compose.ui.graphics.Color
 import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.components.StreamCleanBottomNav
 import com.example.ui.components.StreamCleanTab
+import com.example.ui.localization.LocalAppStrings
+import com.example.ui.localization.getAppStrings
 import com.example.ui.screens.ChromeBrowserScreen
 import com.example.ui.screens.DownloadHomeScreen
 import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.VideoPlayerScreen
-import com.example.ui.theme.AppBackground
+import com.example.ui.theme.LocalStreamCleanDark
 import com.example.ui.theme.StreamCleanTheme
 import com.example.ui.viewmodel.MainViewModel
 import dev.chrisbanes.haze.HazeState
@@ -46,14 +48,22 @@ class MainActivity : AppCompatActivity() {
 
         setContent {
             val appearance by viewModel.appearance.collectAsState()
+            val language by viewModel.language.collectAsState()
+
             val isDarkTheme = when (appearance) {
                 "Dark" -> true
                 "Light" -> false
-                else -> androidx.compose.foundation.isSystemInDarkTheme()
+                else -> isSystemInDarkTheme()
             }
 
-            StreamCleanTheme(darkTheme = isDarkTheme) {
-                StreamCleanMainApp(viewModel = viewModel)
+            val appStrings = getAppStrings(language)
+
+            CompositionLocalProvider(
+                LocalAppStrings provides appStrings
+            ) {
+                StreamCleanTheme(darkTheme = isDarkTheme) {
+                    StreamCleanMainApp(viewModel = viewModel)
+                }
             }
         }
     }
@@ -85,6 +95,7 @@ fun StreamCleanMainApp(
     val playingVideo by viewModel.playingVideo.collectAsState()
     val socialUrl by viewModel.socialUrl.collectAsState()
     val showingPrivateFiles by viewModel.showingPrivateFiles.collectAsState()
+    val isDark = LocalStreamCleanDark.current
     val hazeState = remember { HazeState() }
 
     // Handle back button to return to home tab when in other tabs
@@ -96,7 +107,7 @@ fun StreamCleanMainApp(
         modifier = modifier
             .fillMaxSize()
     ) {
-        AppPremiumBackgroundCanvas()
+        AppPremiumBackgroundCanvas(isDark = isDark)
 
         // Show Social WebView if active
         if (socialUrl != null) {

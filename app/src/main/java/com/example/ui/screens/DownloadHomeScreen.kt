@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -70,6 +71,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
@@ -88,6 +90,7 @@ import com.example.engine.VideoFormatInfo
 import com.example.engine.VideoMetadata
 import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.components.ScreenBackground
+import com.example.ui.localization.LocalAppStrings
 import com.example.ui.theme.AppBackground
 import dev.chrisbanes.haze.HazeState
 import com.example.ui.theme.CardBorder
@@ -108,6 +111,7 @@ fun DownloadHomeScreen(
     hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
+    val strings = LocalAppStrings.current
     val urlInput by viewModel.urlInput.collectAsState()
     val selectedFormatTab by viewModel.selectedFormatTab.collectAsState()
     val downloadCards by viewModel.downloadCards.collectAsState()
@@ -115,8 +119,7 @@ fun DownloadHomeScreen(
     val formatDialogMetadata by viewModel.formatDialogMetadata.collectAsState()
     val isLoadingFormats by viewModel.isLoadingFormats.collectAsState()
 
-    // Real-time RAM & Network Speed (Features 1 & 2)
-    val ramState by viewModel.ramState.collectAsState()
+    // Real-time Network Speed State
     val networkSpeedState by viewModel.networkSpeedState.collectAsState()
 
     // Dialog states (Features 3, 4, 5, 6, 7)
@@ -133,83 +136,68 @@ fun DownloadHomeScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
                 .padding(bottom = 80.dp)
         ) {
-            // Screen Title & Subtitle
-            Text(
-                text = "Download",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary,
-                modifier = Modifier.testTag("download_screen_title")
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Paste a video link to download",
-                fontSize = 14.sp,
-                color = TextSecondary,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
-
-            // Features 1 & 2: Real-time RAM & Internet Speed Indicators
+            // Header Row: "Download" Title + Compact Internet Speed Indicator
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // RAM Status Card
-                Card(
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = CardSurface),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(9.dp)
-                                .clip(CircleShape)
-                                .background(ramState.statusLevel.color)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(text = "RAM", fontSize = 11.sp, color = TextSecondary, fontWeight = FontWeight.Medium)
-                            Text(text = ramState.displayText, fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        }
-                    }
-                }
+                Text(
+                    text = strings.downloadTitle,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                    modifier = Modifier.testTag("download_screen_title")
+                )
 
-                // Internet Speed Status Card
-                Card(
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = CardSurface),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = SolidColor(CardBorder))
+                // Compact Real-time Internet Speed Pill
+                Box(
+                    modifier = Modifier
+                        .shadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.25f))
+                        .border(
+                            width = 1.dp,
+                            color = Color.White.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(9.dp)
+                                .size(8.dp)
                                 .clip(CircleShape)
                                 .background(networkSpeedState.statusLevel.color)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(text = "Internet Speed", fontSize = 11.sp, color = TextSecondary, fontWeight = FontWeight.Medium)
-                            Text(text = networkSpeedState.displayText, fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = networkSpeedState.displayText,
+                            fontSize = 12.sp,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = strings.downloadSubtitle,
+                fontSize = 14.sp,
+                color = TextSecondary,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
 
             // URL Input Card
             Box(
@@ -237,7 +225,7 @@ fun DownloadHomeScreen(
                     Box(modifier = Modifier.weight(1f)) {
                         if (urlInput.isEmpty()) {
                             Text(
-                                text = "Paste video link",
+                                text = strings.pasteVideoLinkHint,
                                 color = TextMuted,
                                 fontSize = 15.sp
                             )
@@ -271,13 +259,13 @@ fun DownloadHomeScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.ContentPaste,
-                            contentDescription = "Paste",
+                            contentDescription = strings.pasteButton,
                             tint = MintGreenPillDarkText,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "Paste",
+                            text = strings.pasteButton,
                             color = MintGreenPillDarkText,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
@@ -304,13 +292,13 @@ fun DownloadHomeScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.PlaylistAdd,
-                        contentDescription = "Paste Multiple Link",
+                        contentDescription = strings.pasteMultipleLinkButton,
                         tint = MintGreenPillDarkText,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "Paste Multiple Link",
+                        text = strings.pasteMultipleLinkButton,
                         color = MintGreenPillDarkText,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
@@ -369,13 +357,13 @@ fun DownloadHomeScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Outlined.Movie,
-                                contentDescription = "MP4 Video",
+                                contentDescription = strings.mp4VideoTab,
                                 tint = if (isVideoSelected) Color.White else TextPrimary,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "MP4 Video",
+                                text = strings.mp4VideoTab,
                                 color = if (isVideoSelected) Color.White else TextPrimary,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -398,13 +386,13 @@ fun DownloadHomeScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Outlined.MusicNote,
-                                contentDescription = "MP3 Audio",
+                                contentDescription = strings.mp3AudioTab,
                                 tint = if (isAudioSelected) Color.White else TextPrimary,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "MP3 Audio",
+                                text = strings.mp3AudioTab,
                                 color = if (isAudioSelected) Color.White else TextPrimary,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -434,7 +422,7 @@ fun DownloadHomeScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Analyzing formats...",
+                        text = strings.fetchingVideoInfo,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White
@@ -442,13 +430,13 @@ fun DownloadHomeScreen(
                 } else {
                     Icon(
                         imageVector = Icons.Outlined.FileDownload,
-                        contentDescription = "Download",
+                        contentDescription = strings.downloadActionButton,
                         tint = Color.White,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Download",
+                        text = strings.downloadActionButton,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White
@@ -615,14 +603,14 @@ fun DownloadHomeScreen(
                 icon = {
                     Icon(
                         imageVector = Icons.Outlined.WarningAmber,
-                        contentDescription = "Low Memory Warning",
+                        contentDescription = strings.lowMemoryTitle,
                         tint = Color(0xFFEF4444),
                         modifier = Modifier.size(36.dp)
                     )
                 },
                 title = {
                     Text(
-                        text = "Low available memory",
+                        text = strings.lowMemoryTitle,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp,
                         color = TextPrimary
@@ -630,7 +618,7 @@ fun DownloadHomeScreen(
                 },
                 text = {
                     Text(
-                        text = "Your device currently has limited available memory. For a smoother download, please close unnecessary background apps or select a lower video quality.",
+                        text = strings.lowMemoryWarningText,
                         fontSize = 14.sp,
                         color = TextSecondary,
                         lineHeight = 20.sp
@@ -642,12 +630,12 @@ fun DownloadHomeScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Choose Lower Quality", color = Color.White)
+                        Text(strings.downloadStandardBtn, color = Color.White)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { viewModel.continueDownloadDespiteMemoryWarning() }) {
-                        Text("Continue Anyway", color = TextSecondary)
+                        Text(strings.downloadAnywayBtn, color = TextSecondary)
                     }
                 },
                 shape = RoundedCornerShape(16.dp),
@@ -666,6 +654,7 @@ fun MultipleUrlDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val strings = LocalAppStrings.current
     val clipboardManager = LocalClipboardManager.current
     val urls by viewModel.multipleUrls.collectAsState()
     val formatType by viewModel.multipleFormatType.collectAsState()
@@ -681,7 +670,7 @@ fun MultipleUrlDialog(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Paste Multiple Links",
+                    text = strings.downloadMultipleVideosTitle,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
                     color = TextPrimary
@@ -700,7 +689,7 @@ fun MultipleUrlDialog(
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    text = "Add between 2 and 12 video or audio links to download sequentially in the background.",
+                    text = strings.videoUrlsSubtitle,
                     fontSize = 13.sp,
                     color = TextSecondary,
                     modifier = Modifier.padding(bottom = 14.dp)
@@ -726,7 +715,7 @@ fun MultipleUrlDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "MP4 Video",
+                            text = strings.mp4VideoTab,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = if (isVideo) Color.White else TextPrimary
@@ -744,7 +733,7 @@ fun MultipleUrlDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "MP3 Audio",
+                            text = strings.mp3AudioTab,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = if (isAudio) Color.White else TextPrimary
@@ -909,13 +898,13 @@ fun MultipleUrlDialog(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
-                            contentDescription = "Add Link",
+                            contentDescription = strings.addUrlButton,
                             tint = PrimaryGreen,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "Add another link",
+                            text = strings.addUrlButton,
                             color = PrimaryGreen,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
@@ -936,12 +925,12 @@ fun MultipleUrlDialog(
                 ),
                 shape = RoundedCornerShape(10.dp)
             ) {
-                Text("Continue Download", color = Color.White)
+                Text(strings.downloadAllButton, color = Color.White)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextSecondary)
+                Text(strings.cancelButton, color = TextSecondary)
             }
         },
         shape = RoundedCornerShape(16.dp),
@@ -956,6 +945,7 @@ fun FormatSelectionDialog(
     onDismiss: () -> Unit,
     onConfirm: (VideoFormatInfo) -> Unit
 ) {
+    val strings = LocalAppStrings.current
     val formats = if (isAudio) {
         if (metadata.audioFormats.isNotEmpty()) metadata.audioFormats else metadata.formats
     } else {
@@ -1025,7 +1015,7 @@ fun FormatSelectionDialog(
 
                     // Title & Metadata
                     Text(
-                        text = if (isAudio) "Select Audio Bitrate" else "Select Video Quality",
+                        text = strings.chooseFormatAndQualityTitle,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp,
                         color = TextPrimary
@@ -1105,7 +1095,7 @@ fun FormatSelectionDialog(
                                 .height(48.dp),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text("Cancel", color = TextSecondary, fontWeight = FontWeight.Medium)
+                            Text(strings.cancelButton, color = TextSecondary, fontWeight = FontWeight.Medium)
                         }
 
                         Button(
@@ -1116,7 +1106,7 @@ fun FormatSelectionDialog(
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text("Start Download", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text(strings.downloadButton, color = Color.White, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }

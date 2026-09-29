@@ -22,7 +22,6 @@ import com.example.engine.VideoFormatInfo
 import com.example.engine.VideoMetadata
 import com.example.service.DownloadService
 import com.example.ui.components.StreamCleanTab
-import com.example.util.DeviceRamState
 import com.example.util.DeviceStatusMonitor
 import com.example.util.NetworkSpeedState
 import com.example.util.StatusLevel
@@ -106,10 +105,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLoadingFormats = MutableStateFlow(false)
     val isLoadingFormats: StateFlow<Boolean> = _isLoadingFormats.asStateFlow()
 
-    // Real-time RAM & Network Speed States (Features 1 & 2)
-    private val _ramState = MutableStateFlow(DeviceRamState())
-    val ramState: StateFlow<DeviceRamState> = _ramState.asStateFlow()
-
+    // Real-time Network Speed State
     private val _networkSpeedState = MutableStateFlow(NetworkSpeedState())
     val networkSpeedState: StateFlow<NetworkSpeedState> = _networkSpeedState.asStateFlow()
 
@@ -153,14 +149,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val notificationsEnabled = settingsManager.notificationsEnabled
 
     init {
-        // Lightweight periodic status sampler (every 2.5s) for RAM and Internet Throughput
+        // Lightweight periodic status sampler (every 2.5s) for Internet Throughput
         viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    _ramState.value = deviceStatusMonitor.getMemoryState()
                     _networkSpeedState.value = deviceStatusMonitor.sampleInternetSpeed()
                 } catch (e: Exception) {
-                    Log.w(TAG, "Error sampling device status: ${e.message}")
+                    Log.w(TAG, "Error sampling internet speed: ${e.message}")
                 }
                 delay(2500)
             }
@@ -303,7 +298,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (rawUrl.isEmpty()) return
 
         // Check memory pressure safety (Feature 3)
-        if (_ramState.value.statusLevel == StatusLevel.RED && format.resolution.contains("720") && !format.isAudio) {
+        if (deviceStatusMonitor.isDeviceLowMemory() && format.resolution.contains("720") && !format.isAudio) {
             pendingFormatAfterMemoryWarning = format
             _showLowMemoryDialog.value = true
             _formatDialogMetadata.value = null
@@ -651,25 +646,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val trimmed = url.trim()
             if (trimmed.isEmpty()) return ""
             return try {
-                val uri = Uri.parse(trimmed)
-                if (uri.scheme == null || !uri.isHierarchical) {
+                if (!trimmed.contains("si=")) {
                     return trimmed
                 }
-                val queryNames = uri.queryParameterNames
-                if (!queryNames.contains("si")) {
-                    return trimmed
+                val queryStart = trimmed.indexOf('?')
+                if (queryStart == -1) return trimmed
+
+                val baseUrl = trimmed.substring(0, queryStart)
+                val queryString = trimmed.substring(queryStart + 1)
+                val queryParams = queryString.split('&').filter { param ->
+                    val key = param.substringBefore('=')
+                    key != "si"
                 }
-                val builder = uri.buildUpon().clearQuery()
-                for (param in queryNames) {
-                    if (param != "si") {
-                        val values = uri.getQueryParameters(param)
-                        for (v in values) {
-                            builder.appendQueryParameter(param, v)
-                        }
-                    }
+
+                val cleaned = if (queryParams.isEmpty()) {
+                    baseUrl
+                } else {
+                    baseUrl + "?" + queryParams.joinToString("&")
                 }
-                val cleaned = builder.build().toString()
-                Log.d(TAG, "URL Sanitization: '$trimmed' -> '$cleaned'")
                 cleaned
             } catch (e: Exception) {
                 trimmed

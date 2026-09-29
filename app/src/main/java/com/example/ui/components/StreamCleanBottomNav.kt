@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -54,9 +53,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.CardSurface
+import com.example.ui.localization.LocalAppStrings
+import com.example.ui.theme.LocalStreamCleanDark
 import com.example.ui.theme.PrimaryGreen
-import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
@@ -89,7 +88,7 @@ private fun getDeviceOptimalBlurRadius(context: Context): Dp {
 /**
  * Floating Glassmorphism (Frosted Glass) Bottom Navigation Bar
  * with hardware-accelerated Haze effect, floating pill style, 1px light border,
- * scale bounce animation, and entry animation.
+ * scale bounce animation, and entry animation. Supports full localization.
  */
 @Composable
 fun StreamCleanBottomNav(
@@ -99,6 +98,8 @@ fun StreamCleanBottomNav(
     hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
+    val strings = LocalAppStrings.current
+    val isDark = LocalStreamCleanDark.current
     val optimalBlurRadius = remember(context) { getDeviceOptimalBlurRadius(context) }
     var isVisible by remember { mutableStateOf(false) }
 
@@ -107,8 +108,9 @@ fun StreamCleanBottomNav(
     }
 
     val cornerShape = RoundedCornerShape(24.dp)
-    val glassBorderColor = Color.White.copy(alpha = 0.25f)
-    val fallbackBackgroundColor = Color.White.copy(alpha = 0.65f)
+    val glassBorderColor = if (isDark) Color.White.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.35f)
+    val fallbackBackgroundColor = if (isDark) Color(0xFF1B221C).copy(alpha = 0.90f) else Color.White.copy(alpha = 0.75f)
+    val glassBackground = if (isDark) Color(0xFF1B221C).copy(alpha = 0.70f) else Color.White.copy(alpha = 0.20f)
 
     AnimatedVisibility(
         visible = isVisible,
@@ -126,7 +128,7 @@ fun StreamCleanBottomNav(
                 Modifier.hazeEffect(
                     state = hazeState,
                     style = HazeStyle(
-                        tint = HazeTint(Color.White.copy(alpha = 0.35f)),
+                        tint = HazeTint(if (isDark) Color(0xFF1B221C).copy(alpha = 0.65f) else Color.White.copy(alpha = 0.35f)),
                         blurRadius = optimalBlurRadius,
                         noiseFactor = 0.05f
                     )
@@ -149,14 +151,14 @@ fun StreamCleanBottomNav(
                 )
                 .clip(cornerShape)
                 .then(hazeModifier)
-                .background(Color.White.copy(alpha = 0.15f))
+                .background(glassBackground)
                 .border(
                     width = 1.dp,
                     color = glassBorderColor,
                     shape = cornerShape
                 )
                 .graphicsLayer {
-                    compositingStrategy = CompositingStrategy.Offscreen
+                    compositingStrategy = CompositingStrategy.Auto
                 }
                 .padding(vertical = 6.dp, horizontal = 8.dp)
         ) {
@@ -170,6 +172,13 @@ fun StreamCleanBottomNav(
                 StreamCleanTab.values().forEach { tab ->
                     val isSelected = tab == currentTab
                     val itemColor = if (isSelected) PrimaryGreen else TextSecondary.copy(alpha = 0.75f)
+
+                    val localizedLabel = when (tab) {
+                        StreamCleanTab.DOWNLOAD -> strings.navDownload
+                        StreamCleanTab.DOWNLOADS -> strings.navDownloads
+                        StreamCleanTab.BROWSER -> strings.navBrowser
+                        StreamCleanTab.SETTINGS -> strings.navSettings
+                    }
 
                     val iconScale by animateFloatAsState(
                         targetValue = if (isSelected) 1.12f else 1.0f,
@@ -203,11 +212,11 @@ fun StreamCleanBottomNav(
                                             color = PrimaryGreen.copy(alpha = 0.12f),
                                             shape = CircleShape
                                         )
-                                )
+                                    )
                             }
                             Icon(
                                 imageVector = tab.icon,
-                                contentDescription = tab.label,
+                                contentDescription = localizedLabel,
                                 tint = itemColor,
                                 modifier = Modifier
                                     .size(24.dp)
@@ -216,10 +225,11 @@ fun StreamCleanBottomNav(
                         }
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = tab.label,
+                            text = localizedLabel,
                             color = itemColor,
                             fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1
                         )
                     }
                 }

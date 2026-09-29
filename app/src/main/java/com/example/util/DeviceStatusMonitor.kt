@@ -11,16 +11,6 @@ enum class StatusLevel(val color: Color) {
     RED(Color(0xFFEF4444))
 }
 
-data class DeviceRamState(
-    val availableBytes: Long = 0L,
-    val totalBytes: Long = 0L,
-    val isLowMemory: Boolean = false,
-    val availablePercent: Int = 0,
-    val displayText: String = "Calculating...",
-    val detailedText: String = "",
-    val statusLevel: StatusLevel = StatusLevel.GREEN
-)
-
 data class NetworkSpeedState(
     val speedBytesPerSec: Long = 0L,
     val displayText: String = "0 KB/s",
@@ -34,47 +24,14 @@ class DeviceStatusMonitor(private val context: Context) {
     private var lastTotalTxBytes: Long = TrafficStats.getTotalTxBytes()
     private var lastTimestamp: Long = System.currentTimeMillis()
 
-    fun getMemoryState(): DeviceRamState {
+    /**
+     * On-demand check for critical system memory pressure during heavy download operations.
+     */
+    fun isDeviceLowMemory(): Boolean {
+        val am = activityManager ?: return false
         val memoryInfo = ActivityManager.MemoryInfo()
-        val am = activityManager
-        if (am == null) {
-            return DeviceRamState(displayText = "Available", statusLevel = StatusLevel.GREEN)
-        }
         am.getMemoryInfo(memoryInfo)
-
-        val availBytes = memoryInfo.availMem
-        val totalBytes = memoryInfo.totalMem
-        val isLowMem = memoryInfo.lowMemory
-        val availPercent = if (totalBytes > 0) ((availBytes.toDouble() / totalBytes) * 100).toInt() else 0
-
-        val availGb = availBytes.toDouble() / (1024 * 1024 * 1024)
-        val totalGb = totalBytes.toDouble() / (1024 * 1024 * 1024)
-
-        // Thresholds for RAM health status
-        val statusLevel = when {
-            isLowMem || availBytes < THRESHOLD_CRITICAL_RAM_BYTES || availPercent < 10 -> StatusLevel.RED
-            availBytes < THRESHOLD_WARN_RAM_BYTES || availPercent < 18 -> StatusLevel.YELLOW
-            else -> StatusLevel.GREEN
-        }
-
-        val display = if (availGb >= 1.0) {
-            String.format("%.1f GB free", availGb)
-        } else {
-            val availMb = availBytes / (1024 * 1024)
-            "$availMb MB free"
-        }
-
-        val detailed = String.format("%.1f / %.1f GB (%d%% free)", availGb, totalGb, availPercent)
-
-        return DeviceRamState(
-            availableBytes = availBytes,
-            totalBytes = totalBytes,
-            isLowMemory = isLowMem,
-            availablePercent = availPercent,
-            displayText = display,
-            detailedText = detailed,
-            statusLevel = statusLevel
-        )
+        return memoryInfo.lowMemory || memoryInfo.availMem < THRESHOLD_CRITICAL_RAM_BYTES
     }
 
     fun sampleInternetSpeed(): NetworkSpeedState {
@@ -124,10 +81,7 @@ class DeviceStatusMonitor(private val context: Context) {
     }
 
     companion object {
-        // Tunable thresholds for RAM and Network
         const val THRESHOLD_CRITICAL_RAM_BYTES = 300L * 1024 * 1024 // 300 MB
-        const val THRESHOLD_WARN_RAM_BYTES = 600L * 1024 * 1024     // 600 MB
-
         const val SPEED_THRESHOLD_HIGH_BPS = 1_500_000L // 1.5 MB/s
         const val SPEED_THRESHOLD_LOW_BPS = 100_000L    // 100 KB/s
     }

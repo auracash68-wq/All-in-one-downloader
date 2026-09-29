@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -58,6 +59,7 @@ import com.example.R
 import com.example.data.local.DownloadEntity
 import com.example.ui.components.AppPremiumBackgroundCanvas
 import com.example.ui.components.ScreenBackground
+import com.example.ui.localization.LocalAppStrings
 import dev.chrisbanes.haze.HazeState
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardBorder
@@ -78,6 +80,7 @@ fun DownloadsScreen(
     hazeState: HazeState? = null
 ) {
     val context = LocalContext.current
+    val strings = LocalAppStrings.current
     val showingPrivateFiles by viewModel.showingPrivateFiles.collectAsState()
 
     if (showingPrivateFiles) {
@@ -92,7 +95,7 @@ fun DownloadsScreen(
     val filteredDownloads by viewModel.filteredDownloads.collectAsState()
     val selectedFilter by viewModel.filterMediaType.collectAsState()
 
-    val fileCountText = "${filteredDownloads.size} files"
+    val fileCountText = "${filteredDownloads.size} ${strings.filesCount}"
     val scrollState = rememberScrollState()
 
     ScreenBackground(
@@ -103,6 +106,7 @@ fun DownloadsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
                 .padding(bottom = 80.dp)
@@ -116,7 +120,7 @@ fun DownloadsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Downloads",
+                    text = strings.downloadsTitle,
                     fontSize = 28.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary,
@@ -192,13 +196,13 @@ fun DownloadsScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Videocam,
-                        contentDescription = "Video",
+                        contentDescription = strings.tabVideo,
                         tint = videoTextColor,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Video",
+                        text = strings.tabVideo,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = videoTextColor
@@ -223,13 +227,13 @@ fun DownloadsScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.MusicNote,
-                        contentDescription = "Audio",
+                        contentDescription = strings.tabAudio,
                         tint = audioTextColor,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Audio",
+                        text = strings.tabAudio,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = audioTextColor
@@ -257,20 +261,20 @@ fun DownloadsScreen(
                     ) {
                         Icon(
                             imageVector = if (selectedFilter == "VIDEO") Icons.Outlined.Videocam else Icons.Outlined.MusicNote,
-                            contentDescription = "No files",
+                            contentDescription = strings.noDownloadsYet,
                             tint = TextSecondary,
                             modifier = Modifier.size(48.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "No $selectedFilter downloads yet",
+                            text = strings.noDownloadsYet,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = TextPrimary
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Paste a video link in the Download tab to save offline",
+                            text = strings.noDownloadsSubtitle,
                             fontSize = 13.sp,
                             color = TextSecondary
                         )
@@ -334,6 +338,7 @@ fun DownloadListItemRow(
     onAddToPrivate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalAppStrings.current
     var menuExpanded by remember { mutableStateOf(false) }
     val isAudio = item.mediaType == "AUDIO"
 
@@ -461,7 +466,7 @@ fun DownloadListItemRow(
                 modifier = Modifier.background(CardSurface)
             ) {
                 DropdownMenuItem(
-                    text = { Text("Play in Player", color = TextPrimary) },
+                    text = { Text(strings.playInPlayer, color = TextPrimary) },
                     leadingIcon = {
                         Icon(Icons.Outlined.PlayArrow, contentDescription = null, tint = TextPrimary)
                     },
@@ -471,7 +476,7 @@ fun DownloadListItemRow(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Add to Private", color = TextPrimary) },
+                    text = { Text(strings.addToPrivate, color = TextPrimary) },
                     leadingIcon = {
                         Icon(Icons.Outlined.Lock, contentDescription = null, tint = TextPrimary)
                     },
@@ -481,7 +486,7 @@ fun DownloadListItemRow(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Export to Gallery", color = TextPrimary) },
+                    text = { Text(strings.exportToGallery, color = TextPrimary) },
                     leadingIcon = {
                         Icon(Icons.Outlined.SaveAlt, contentDescription = null, tint = TextPrimary)
                     },
@@ -491,7 +496,7 @@ fun DownloadListItemRow(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Share", color = TextPrimary) },
+                    text = { Text(strings.share, color = TextPrimary) },
                     leadingIcon = {
                         Icon(Icons.Outlined.IosShare, contentDescription = null, tint = TextPrimary)
                     },
@@ -501,7 +506,7 @@ fun DownloadListItemRow(
                     }
                 )
                 DropdownMenuItem(
-                    text = { Text("Delete", color = Color(0xFFDC2626)) },
+                    text = { Text(strings.delete, color = Color(0xFFDC2626)) },
                     leadingIcon = {
                         Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color(0xFFDC2626))
                     },
