@@ -41,6 +41,25 @@ data class VideoFormatInfo(
     val isHdr: Boolean = false
 )
 
+enum class ExtractionErrorKind {
+    NETWORK_TIMEOUT,
+    NETWORK_ERROR,
+    UNSUPPORTED_URL,
+    PRIVATE_CONTENT,
+    AUTHENTICATION_REQUIRED,
+    EXTRACTION_ERROR,
+    PROCESS_TIMEOUT,
+    PROCESS_CANCELLED,
+    INVALID_METADATA,
+    UNKNOWN_ERROR
+}
+
+class ExtractionException(
+    val kind: ExtractionErrorKind,
+    val userMessage: String,
+    cause: Throwable? = null
+) : Exception(userMessage, cause)
+
 data class VideoMetadata(
     val title: String,
     val duration: String,
@@ -138,7 +157,7 @@ class DownloadEngine private constructor(private val context: Context) {
 
     private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
 
-    private suspend fun ensureEngineInitialized() = withContext(Dispatchers.IO) {
+    suspend fun ensureEngineInitialized() = withContext(Dispatchers.IO) {
         if (isEngineInitialized) return@withContext
         initMutex.withLock {
             if (isEngineInitialized) return@withContext
@@ -150,15 +169,6 @@ class DownloadEngine private constructor(private val context: Context) {
                 } catch (t: Throwable) {
                     Log.w(TAG, "FFmpeg initialization notice: ${t.message}")
                 }
-
-                try {
-                    Log.i(TAG, "Updating yt-dlp executable to latest stable release...")
-                    val status = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext, YoutubeDL.UpdateChannel.STABLE)
-                    Log.i(TAG, "yt-dlp update status: $status")
-                } catch (ut: Throwable) {
-                    Log.w(TAG, "yt-dlp update attempt notice: ${ut.message}")
-                }
-
                 isEngineInitialized = true
                 Log.i(TAG, "YoutubeDL and FFmpeg initialized successfully")
             } catch (e: Throwable) {
@@ -225,28 +235,46 @@ class DownloadEngine private constructor(private val context: Context) {
         return memoryInfo.lowMemory || memoryInfo.availMem < (250L * 1024 * 1024)
     }
 
-    suspend fun fetchFormats(url: String): VideoMetadata = withContext(Dispatchers.IO) {
+    fun destroyProcess(processId: String) {
+        try {
+            Log.i(TAG, "[PROCESS_CLEANUP] Destroying native process: $processId")
+            YoutubeDL.getInstance().destroyProcessById(processId)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error destroying process $processId: ${e.message}")
+        }
+    }
+
+    suspend fun fetchFormats(url: String, processId: String? = null): VideoMetadata = withContext(Dispatchers.IO) {
         val sanitized = sanitizeUrlInput(url)
+        val startTime = System.currentTimeMillis()
+        val effectiveProcessId = processId ?: "info_${System.currentTimeMillis()}_${(1000..9999).random()}"
+
+        Log.i(TAG, "[FETCH_START] Starting metadata extraction for URL: $sanitized (processId: $effectiveProcessId)")
 
         // 1. Direct media links (.mp4, .mp3, etc.)
         if (isDirectMediaUrl(sanitized)) {
             val directMeta = probeDirectMediaUrl(sanitized)
             if (directMeta != null) {
+                Log.i(TAG, "[GET_INFO_SUCCESS] Direct media probe verified for $sanitized")
+                Log.i(TAG, "[FETCH_COMPLETE] Completed direct stream fetch in ${System.currentTimeMillis() - startTime}ms")
                 return@withContext directMeta
             }
         }
 
         // 2. Real extraction via YoutubeDL
+        Log.i(TAG, "[ENGINE_INITIALIZATION_START] Ensuring YoutubeDL and FFmpeg native runtimes are initialized")
         ensureEngineInitialized()
-        Log.d(TAG, "Fetching real video info using YoutubeDL for: $sanitized")
+        Log.i(TAG, "[ENGINE_INITIALIZATION_COMPLETE] Native runtimes ready")
 
         val request = YoutubeDLRequest(sanitized).apply {
             addOption("--no-warnings")
             addOption("--no-update")
             addOption("--geo-bypass")
+            addOption("--socket-timeout", "15")
+            addOption("--retries", "2")
             if (isYouTubeUrl(sanitized)) {
-                addOption("--extractor-args", "youtube:player_client=android,web,web_creator,mweb")
-                addOption("--user-agent", "Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0")
+                addOption("--extractor-args", "youtube:player_client=ios,android_creator,mweb,web")
+                addOption("--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1")
             } else if (isDailymotionUrl(sanitized)) {
                 addOption("--referer", "https://www.dailymotion.com/")
                 addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -258,54 +286,115 @@ class DownloadEngine private constructor(private val context: Context) {
             }
         }
 
-        val videoInfo: VideoInfo? = try {
-            YoutubeDL.getInstance().getInfo(request)
+        Log.i(TAG, "[GET_INFO_START] Executing YoutubeDL getInfo for: $sanitized (processId: $effectiveProcessId)")
+
+        var videoInfo: VideoInfo? = null
+        var extractionError: Throwable? = null
+
+        try {
+            // Adaptive timeout: bounded by 150 seconds upper-bound to tolerate slow devices/networks/redirects
+            val result = kotlinx.coroutines.withTimeoutOrNull(150_000L) {
+                YoutubeDL.getInstance().getInfo(request)
+            }
+            if (result != null) {
+                videoInfo = result
+                Log.i(TAG, "[GET_INFO_SUCCESS] Successfully retrieved video info for: '${result.title}' (duration: ${result.duration}s)")
+            } else {
+                Log.w(TAG, "[GET_INFO_TIMEOUT] Extraction timed out after 150s for: $sanitized")
+                destroyProcess(effectiveProcessId)
+                throw ExtractionException(
+                    ExtractionErrorKind.PROCESS_TIMEOUT,
+                    "Extraction timed out. The server took too long to respond. Please check your network and try again."
+                )
+            }
+        } catch (e: ExtractionException) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            Log.i(TAG, "[PROCESS_CANCEL] Extraction cancelled for processId: $effectiveProcessId")
+            destroyProcess(effectiveProcessId)
+            throw ExtractionException(
+                ExtractionErrorKind.PROCESS_CANCELLED,
+                "Metadata extraction was cancelled.",
+                e
+            )
         } catch (e: Throwable) {
-            Log.w(TAG, "YoutubeDL getInfo failed for $sanitized: ${e.message}. Using resilient fallback.")
-            null
+            Log.w(TAG, "[GET_INFO_FAILURE] YoutubeDL getInfo failed for $sanitized: ${e.message}")
+            extractionError = e
+            destroyProcess(effectiveProcessId)
         }
 
-        var title = videoInfo?.title?.takeIf { it.isNotBlank() }
-        var thumb = videoInfo?.thumbnail?.takeIf { it.isNotBlank() }
+        if (videoInfo == null) {
+            // For public YouTube URLs where scraper got bot-challenged, check official oEmbed API
+            if (isYouTubeUrl(sanitized)) {
+                val supplemental = fetchOEmbedSupplemental(sanitized)
+                if (supplemental != null && supplemental.first.isNotBlank()) {
+                    val fallbackTitle = supplemental.first
+                    val fallbackThumb = supplemental.second.ifBlank {
+                        val ytId = extractYouTubeVideoId(sanitized)
+                        if (!ytId.isNullOrEmpty()) "https://img.youtube.com/vi/$ytId/hqdefault.jpg" else null
+                    }
+                    val videoFormats = generateDefaultVideoFormats(0)
+                    val audioFormats = parseAudioFormats(null, 0)
+                    Log.i(TAG, "[GET_INFO_SUCCESS] Recovered YouTube public metadata via oEmbed: '$fallbackTitle'")
+                    Log.i(TAG, "[FETCH_COMPLETE] Completed format fetch for '$fallbackTitle' via oEmbed recovery in ${System.currentTimeMillis() - startTime}ms")
+                    return@withContext VideoMetadata(
+                        title = fallbackTitle,
+                        duration = "",
+                        durationSeconds = 0,
+                        thumbnailUrl = fallbackThumb,
+                        videoFormats = videoFormats,
+                        audioFormats = audioFormats
+                    )
+                }
+            }
 
-        // Supplemental oEmbed lookup if needed or if getInfo was blocked by anti-bot verification
-        if ((title == null || thumb == null) && isYouTubeUrl(sanitized)) {
-            val supplemental = fetchOEmbedSupplemental(sanitized)
-            if (supplemental != null) {
-                if (title == null && supplemental.first.isNotBlank()) {
-                    title = supplemental.first
-                }
-                if (thumb == null && supplemental.second.isNotBlank()) {
-                    thumb = supplemental.second
-                }
+            // Classify failure into structured, helpful user message
+            val errMsg = (extractionError?.message ?: "").lowercase()
+            val kind = when {
+                errMsg.contains("sign in to confirm") || errMsg.contains("login required") || errMsg.contains("account required") ->
+                    ExtractionErrorKind.AUTHENTICATION_REQUIRED
+                errMsg.contains("private video") || errMsg.contains("this video is private") || errMsg.contains("video unavailable") || errMsg.contains("removed") ->
+                    ExtractionErrorKind.PRIVATE_CONTENT
+                errMsg.contains("unsupported url") || errMsg.contains("is not a valid url") ->
+                    ExtractionErrorKind.UNSUPPORTED_URL
+                errMsg.contains("timed out") || errMsg.contains("timeout") || errMsg.contains("sockettimeout") ->
+                    ExtractionErrorKind.NETWORK_TIMEOUT
+                errMsg.contains("unknownhost") || errMsg.contains("network is unreachable") || errMsg.contains("connectexception") ->
+                    ExtractionErrorKind.NETWORK_ERROR
+                else ->
+                    ExtractionErrorKind.EXTRACTION_ERROR
             }
-            if (thumb == null) {
-                val ytId = extractYouTubeVideoId(sanitized)
-                if (!ytId.isNullOrEmpty()) {
-                    thumb = "https://img.youtube.com/vi/$ytId/hqdefault.jpg"
-                }
+            val userMsg = when (kind) {
+                ExtractionErrorKind.AUTHENTICATION_REQUIRED -> "This video requires login or authentication to access."
+                ExtractionErrorKind.PRIVATE_CONTENT -> "This video is private, unavailable, or restricted by the author."
+                ExtractionErrorKind.UNSUPPORTED_URL -> "Unsupported video URL format. Please check the link."
+                ExtractionErrorKind.NETWORK_TIMEOUT -> "Network timed out while fetching media info. Please check connection and retry."
+                ExtractionErrorKind.NETWORK_ERROR -> "Network connection error while connecting to media server."
+                else -> "Unable to fetch video information. Please check the link and try again."
             }
+            throw ExtractionException(kind, userMsg, extractionError)
         }
 
-        val finalTitle = title ?: generateFallbackTitle(sanitized)
-        val durationSecs = videoInfo?.duration ?: 0
+        val finalTitle = videoInfo.title?.takeIf { it.isNotBlank() } ?: generateFallbackTitle(sanitized)
+        val durationSecs = videoInfo.duration
         val durationStr = formatDuration(durationSecs)
+        val thumb = videoInfo.thumbnail?.takeIf { it.isNotBlank() }
 
-        // Parse video formats strictly applying the 144p to 720p policy
-        val videoFormats = if (videoInfo != null) {
-            parseVideoFormats(videoInfo.formats, durationSecs)
-        } else {
-            generateDefaultVideoFormats(durationSecs)
+        // Parse REAL video formats strictly applying the 144p to 720p policy
+        val videoFormats = parseVideoFormats(videoInfo.formats, durationSecs)
+
+        // Parse REAL audio formats
+        val audioFormats = parseAudioFormats(videoInfo.formats, durationSecs)
+
+        if (videoFormats.isEmpty() && audioFormats.isEmpty()) {
+            Log.w(TAG, "[GET_INFO_FAILURE] No downloadable 144p-720p video or audio streams parsed for $sanitized")
+            throw ExtractionException(
+                ExtractionErrorKind.INVALID_METADATA,
+                "No supported downloadable video (144p–720p) or audio streams found for this link."
+            )
         }
 
-        // Parse audio formats without the 144p-720p restriction
-        val audioFormats = if (videoInfo != null) {
-            parseAudioFormats(videoInfo.formats, durationSecs)
-        } else {
-            parseAudioFormats(null, durationSecs)
-        }
-
-        Log.d(TAG, "Fetched formats: '$finalTitle', duration: $durationStr, video formats: ${videoFormats.size}, audio formats: ${audioFormats.size}")
+        Log.i(TAG, "[FETCH_COMPLETE] Completed format fetch for '$finalTitle' with ${videoFormats.size} video, ${audioFormats.size} audio formats in ${System.currentTimeMillis() - startTime}ms")
 
         return@withContext VideoMetadata(
             title = finalTitle,
@@ -733,8 +822,8 @@ class DownloadEngine private constructor(private val context: Context) {
                         addOption("--no-update")
                         addOption("--geo-bypass")
                         if (isYouTubeUrl(sanitizedUrl)) {
-                            addOption("--extractor-args", "youtube:player_client=android,web,web_creator,mweb")
-                            addOption("--user-agent", "Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0")
+                            addOption("--extractor-args", "youtube:player_client=ios,android_creator,mweb,web")
+                            addOption("--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1")
                         } else if (isDailymotionUrl(sanitizedUrl)) {
                             addOption("--referer", "https://www.dailymotion.com/")
                             addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")

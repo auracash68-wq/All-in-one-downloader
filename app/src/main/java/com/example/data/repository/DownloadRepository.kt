@@ -33,16 +33,11 @@ class DownloadRepository(
     val audioDownloads: Flow<List<DownloadEntity>> = downloadDao.getDownloadsByType("AUDIO")
     val activeDownloads: Flow<List<DownloadEntity>> = downloadDao.getActiveDownloads()
 
-    suspend fun fetchVideoInfo(url: String): VideoMetadata = withContext(Dispatchers.IO) {
+    suspend fun fetchVideoInfo(url: String, processId: String? = null): VideoMetadata = withContext(Dispatchers.IO) {
         val sanitized = url.substringBefore("?si=").substringBefore("&si=").trim()
-        Log.d("DownloadRepository", "fetchVideoInfo requested for sanitized URL: $sanitized (original: $url)")
-        try {
-            val engine = DownloadEngine.getInstance(context)
-            engine.fetchFormats(sanitized)
-        } catch (e: Throwable) {
-            Log.e("DownloadRepository", "Error fetching video info for URL: $sanitized with full stack trace:", e)
-            throw e
-        }
+        Log.d("DownloadRepository", "fetchVideoInfo requested for sanitized URL: $sanitized (processId: $processId)")
+        val engine = DownloadEngine.getInstance(context)
+        engine.fetchFormats(sanitized, processId)
     }
 
     suspend fun getDownloadById(id: Long): DownloadEntity? = withContext(Dispatchers.IO) {

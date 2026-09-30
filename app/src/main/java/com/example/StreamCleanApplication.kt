@@ -37,12 +37,14 @@ class StreamCleanApplication : Application() {
         createNotificationChannel()
         com.example.util.NotificationHelper.createNotificationChannels(this)
 
-        // Trigger recovery of any downloads interrupted by prior process death or system shutdown
+        // Pre-warm YoutubeDL engine and trigger recovery of any downloads interrupted by prior process death
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                com.example.engine.DownloadEngine.getInstance(this@StreamCleanApplication).recoverInterruptedDownloads()
+                val engine = com.example.engine.DownloadEngine.getInstance(this@StreamCleanApplication)
+                engine.ensureEngineInitialized()
+                engine.recoverInterruptedDownloads()
             } catch (e: Exception) {
-                Log.w(TAG, "Error recovering interrupted downloads: ${e.message}")
+                Log.w(TAG, "Error initializing engine or recovering interrupted downloads: ${e.message}")
             }
         }
 

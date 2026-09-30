@@ -27,6 +27,7 @@ import com.example.util.FileSecurityUtil
 import com.example.util.NetworkSpeedState
 import com.example.util.StatusLevel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -209,6 +210,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _urlInput.value = url
         if (url != lastExtractedUrl) {
             _videoPreview.value = null
+            if (_isLoadingFormats.value) {
+                cancelFetchVideoInfo()
+            }
         }
     }
 
@@ -221,6 +225,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _urlInput.value = text.trim()
                 if (text.trim() != lastExtractedUrl) {
                     _videoPreview.value = null
+                    if (_isLoadingFormats.value) {
+                        cancelFetchVideoInfo()
+                    }
                 }
                 Toast.makeText(context, "Link pasted!", Toast.LENGTH_SHORT).show()
             }
@@ -240,9 +247,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearPreview() {
         _videoPreview.value = null
         lastExtractedUrl = ""
+        if (_isLoadingFormats.value) {
+            cancelFetchVideoInfo()
+        }
+    }
+
+    private var activeFetchJob: Job? = null
+    private var activeFetchProcessId: String? = null
+
+    fun cancelFetchVideoInfo() {
+        Log.i(TAG, "[PROCESS_CANCEL] User requested cancel for video info fetch")
+        activeFetchJob?.cancel()
+        activeFetchJob = null
+        activeFetchProcessId?.let { pid ->
+            downloadEngine.destroyProcess(pid)
+        }
+        activeFetchProcessId = null
+        _isLoadingFormats.value = false
     }
 
     fun checkAndInitiateDownload(context: Context) {
+        if (_isLoadingFormats.value) {
+            Log.d(TAG, "Video info extraction already in progress. Ignoring duplicate click.")
+            return
+        }
+
         val rawUrl = _urlInput.value.trim()
         if (rawUrl.isEmpty()) {
             Toast.makeText(context, "Please enter or paste a video link", Toast.LENGTH_SHORT).show()
@@ -254,9 +283,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         Log.d(TAG, "Initiating video fetch. Raw: $rawUrl -> Sanitized: $sanitizedUrl")
 
         val requestedMediaType = if (_selectedFormatTab.value == "MP3 Audio") "AUDIO" else "VIDEO"
+        val processId = "info_${System.currentTimeMillis()}_${(1000..9999).random()}"
+        activeFetchProcessId = processId
 
         // Duplicate protection against verified local files
-        viewModelScope.launch(Dispatchers.IO) {
+        activeFetchJob = viewModelScope.launch(Dispatchers.IO) {
             val duplicate = repository.findVerifiedDownloadedMedia(sanitizedUrl, _videoPreview.value, requestedMediaType)
             if (duplicate != null) {
                 withContext(Dispatchers.Main) {
@@ -281,27 +312,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Fetch format profiles for resolution/bitrate selection using real YoutubeDL engine
             _isLoadingFormats.value = true
             try {
-                val metadata = repository.fetchVideoInfo(sanitizedUrl)
+                val metadata = repository.fetchVideoInfo(sanitizedUrl, processId)
                 lastExtractedUrl = sanitizedUrl
                 _videoPreview.value = metadata
                 withContext(Dispatchers.Main) {
                     handleMetadataResult(metadata, context)
                 }
+            } catch (e: com.example.engine.ExtractionException) {
+                Log.e(TAG, "Structured extraction error for $sanitizedUrl (${e.kind}): ${e.userMessage}")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, e.userMessage, Toast.LENGTH_LONG).show()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.i(TAG, "Extraction coroutine cancelled for $sanitizedUrl")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch video info for URL: $sanitizedUrl", e)
                 withContext(Dispatchers.Main) {
-                    val msg = when {
-                        e.message?.contains("Sign in to confirm", ignoreCase = true) == true ->
-                            "This video requires authentication or token verification."
-                        e.message?.contains("Video unavailable", ignoreCase = true) == true ->
-                            "Video is unavailable or private."
-                        else ->
-                            e.localizedMessage ?: "Failed to extract video info. Please check the URL."
-                    }
+                    val msg = e.localizedMessage ?: "Unable to fetch video information. Please check the link and try again."
                     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 }
             } finally {
                 _isLoadingFormats.value = false
+                activeFetchProcessId = null
+                activeFetchJob = null
             }
         }
     }
