@@ -1,0 +1,8 @@
+# Example template for local release signing configuration.
+# Copy this file to `key.properties` (which is excluded by .gitignore) and fill in your values.
+# DO NOT commit your actual key.properties file to git.
+
+storeFile=/path/to/your/upload-keystore.jks
+storePassword=YOUR_KEYSTORE_PASSWORD
+keyAlias=YOUR_KEY_ALIAS
+keyPassword=YOUR_KEY_PASSWORD

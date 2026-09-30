@@ -6,6 +6,7 @@ import android.os.Environment
 import android.util.Log
 import com.example.data.local.DownloadEntity
 import com.example.data.repository.DownloadRepository
+import com.example.util.FileSecurityUtil
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -14,10 +15,12 @@ import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -78,6 +81,11 @@ data class ActiveDownloadState(
     val isRunning: Boolean = false,
     val isCompleted: Boolean = false,
     val isFailed: Boolean = false,
+    val isCancelled: Boolean = false,
+    val isVerifying: Boolean = false,
+    val isPaused: Boolean = false,
+    val downloadedBytes: Long = 0,
+    val totalBytes: Long = 0,
     val errorMessage: String = "",
     val thumbnailUrl: String? = null,
     val duration: String = "",
@@ -90,9 +98,12 @@ data class ActiveDownloadState(
 
 class DownloadEngine private constructor(private val context: Context) {
 
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val mutex = Mutex()
-    private val downloadChannel = Channel<DownloadTask>(Channel.UNLIMITED)
+    private val queuedTasks = java.util.concurrent.ConcurrentLinkedQueue<DownloadTask>()
+    private val queueSignal = Channel<Unit>(Channel.CONFLATED)
+    private val cancelledTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+    private val pausedTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
 
     private val _downloadCards = MutableStateFlow<List<ActiveDownloadState>>(emptyList())
     val downloadCards: StateFlow<List<ActiveDownloadState>> = _downloadCards.asStateFlow()
@@ -100,9 +111,16 @@ class DownloadEngine private constructor(private val context: Context) {
     private val _activeDownload = MutableStateFlow<ActiveDownloadState?>(null)
     val activeDownload: StateFlow<ActiveDownloadState?> = _activeDownload.asStateFlow()
 
+    @Volatile
     private var currentProcessId: String? = null
+    @Volatile
     private var isCancelled = false
+    @Volatile
     private var currentRunningTaskId: Long? = null
+
+    fun hasActiveOrQueuedTasks(): Boolean {
+        return currentRunningTaskId != null || queuedTasks.isNotEmpty()
+    }
 
     private fun updateCard(id: Long, transform: (ActiveDownloadState) -> ActiveDownloadState) {
         _downloadCards.value = _downloadCards.value.map {
@@ -167,9 +185,31 @@ class DownloadEngine private constructor(private val context: Context) {
 
     init {
         scope.launch {
-            for (task in downloadChannel) {
+            while (isActive) {
+                val task = queuedTasks.poll()
+                if (task == null) {
+                    queueSignal.receive()
+                    continue
+                }
+
+                if (cancelledTaskIds.remove(task.entityId)) {
+                    Log.i(TAG, "Task ${task.entityId} was cancelled before starting. Skipping.")
+                    handleQueuedCancellation(task)
+                    continue
+                }
+
+                if (pausedTaskIds.remove(task.entityId)) {
+                    Log.i(TAG, "Task ${task.entityId} was paused before starting. Skipping.")
+                    handleQueuedPause(task)
+                    continue
+                }
+
                 mutex.withLock {
                     processDownloadTask(task)
+                }
+
+                if (queuedTasks.isEmpty() && currentRunningTaskId == null) {
+                    _activeDownload.value = null
                 }
             }
         }
@@ -203,7 +243,6 @@ class DownloadEngine private constructor(private val context: Context) {
         val request = YoutubeDLRequest(sanitized).apply {
             addOption("--no-warnings")
             addOption("--no-update")
-            addOption("--no-check-certificates")
             addOption("--geo-bypass")
             if (isYouTubeUrl(sanitized)) {
                 addOption("--extractor-args", "youtube:player_client=android,web,web_creator,mweb")
@@ -429,17 +468,27 @@ class DownloadEngine private constructor(private val context: Context) {
             progress = 0,
             speed = "Queued...",
             eta = "",
-            isRunning = true,
+            isRunning = false,
             isCompleted = false,
             isFailed = false,
+            isCancelled = false,
+            isVerifying = false,
             thumbnailUrl = thumbnailUrl,
             duration = duration,
             mediaType = mediaType,
             queueIndex = queueIndex,
             queueTotal = queueTotal
         )
-        _downloadCards.value = listOf(initialCard) + _downloadCards.value.filter { it.id != entityId }
-        _activeDownload.value = initialCard
+        _downloadCards.value = _downloadCards.value.filter { it.id != entityId } + initialCard
+
+        // FIX QUEUE CORRECTNESS: Only the running task owns _activeDownload!
+        // Never allow newly added task B or C to overwrite active running task A.
+        if (currentRunningTaskId == null) {
+            val current = _activeDownload.value
+            if (current == null || (!current.isRunning && queuedTasks.isEmpty())) {
+                _activeDownload.value = initialCard
+            }
+        }
 
         val task = DownloadTask(
             entityId = entityId,
@@ -455,16 +504,129 @@ class DownloadEngine private constructor(private val context: Context) {
             queueTotal = queueTotal,
             repository = repository
         )
-        downloadChannel.trySend(task)
+        queuedTasks.add(task)
+        queueSignal.trySend(Unit)
+    }
+
+    /**
+     * Checks if a download with the same URL/media is currently running, queued, or verifying.
+     */
+    fun isAlreadyDownloadingOrQueued(url: String, mediaType: String?): Boolean {
+        val sanitized = sanitizeUrlInput(url)
+        val activeStates = _downloadCards.value.filter {
+            (it.isRunning || it.isVerifying || it.speed == "Queued...") &&
+            !it.isCompleted && !it.isFailed && !it.isCancelled
+        }
+        return activeStates.any { card ->
+            (mediaType == null || card.mediaType.equals(mediaType, ignoreCase = true)) &&
+            isSameUrl(card.url, sanitized)
+        }
+    }
+
+    private fun isSameUrl(url1: String, url2: String): Boolean {
+        if (url1.isBlank() || url2.isBlank()) return false
+        val s1 = sanitizeUrlInput(url1)
+        val s2 = sanitizeUrlInput(url2)
+        if (s1.equals(s2, ignoreCase = true)) return true
+
+        val yt1 = extractYouTubeVideoId(s1)
+        val yt2 = extractYouTubeVideoId(s2)
+        if (yt1 != null && yt2 != null && yt1 == yt2) return true
+
+        return false
+    }
+
+    private fun isRecoverableError(e: Throwable): Boolean {
+        if (isCancelled) return false
+        val message = (e.message ?: "").lowercase()
+        val causeMsg = (e.cause?.message ?: "").lowercase()
+        val full = "$message $causeMsg"
+
+        // Permanent failures - NEVER retry
+        if (full.contains("video unavailable") ||
+            full.contains("private video") ||
+            full.contains("this video has been removed") ||
+            full.contains("sign in to confirm") ||
+            full.contains("account terminated") ||
+            full.contains("unsupported url") ||
+            full.contains("is not a valid url") ||
+            full.contains("404") ||
+            full.contains("not found") ||
+            full.contains("410") ||
+            full.contains("gone") ||
+            full.contains("401") ||
+            full.contains("403") ||
+            full.contains("forbidden") ||
+            full.contains("no video formats found") ||
+            full.contains("requested format is not available") ||
+            full.contains("cleartext") ||
+            full.contains("cleartext http traffic")
+        ) {
+            Log.d(TAG, "Non-recoverable error detected: $full")
+            return false
+        }
+
+        // Recoverable network / transient server errors
+        if (e is java.net.SocketTimeoutException ||
+            e is java.net.ConnectException ||
+            e is java.net.UnknownHostException ||
+            e is java.io.InterruptedIOException ||
+            full.contains("timed out") ||
+            full.contains("timeout") ||
+            full.contains("connection reset") ||
+            full.contains("connection refused") ||
+            full.contains("500") ||
+            full.contains("502") ||
+            full.contains("503") ||
+            full.contains("504") ||
+            full.contains("429") ||
+            full.contains("network is unreachable") ||
+            full.contains("sslhandshakeexception") ||
+            full.contains("temporary failure")
+        ) {
+            Log.i(TAG, "Recoverable error detected: $full")
+            return true
+        }
+
+        return false
     }
 
     private suspend fun processDownloadTask(task: DownloadTask) = withContext(Dispatchers.IO) {
+        if (cancelledTaskIds.contains(task.entityId)) {
+            Log.i(TAG, "Task ${task.entityId} was cancelled before starting. Skipping.")
+            handleQueuedCancellation(task)
+            return@withContext
+        }
+
+        if (pausedTaskIds.contains(task.entityId)) {
+            Log.i(TAG, "Task ${task.entityId} was paused before starting. Skipping.")
+            handleQueuedPause(task)
+            return@withContext
+        }
+
         val downloadDir = getDownloadDirectory()
+        val stagingDir = File(downloadDir, ".staging")
+        if (!stagingDir.exists()) stagingDir.mkdirs()
+
         val extension = if (task.mediaType == "AUDIO") "mp3" else "mp4"
-        val safeTitle = sanitizeFileName(task.title).take(60)
-        val safeFileName = "${safeTitle}_${System.currentTimeMillis() % 100000}.$extension"
-        val outputFile = File(downloadDir, safeFileName)
+        val safeTitle = sanitizeFileName(task.title)
+        val safeFileName = "${safeTitle}_${task.entityId % 100000}.$extension"
+        val finalOutputFile = File(downloadDir, safeFileName)
+        if (!FileSecurityUtil.isPathInApprovedDirectory(context, finalOutputFile, allowPrivate = false)) {
+            Log.e(TAG, "Security error: invalid output file path detected: ${finalOutputFile.path}")
+            markTaskFailed(task, safeFileName, "Security error: invalid output file path")
+            return@withContext
+        }
+
+        // Storage space pre-check (requires at least 50MB free storage)
+        val freeSpace = downloadDir.usableSpace
+        if (freeSpace in 1..(50L * 1024 * 1024)) {
+            Log.e(TAG, "Insufficient disk space: only ${freeSpace / (1024 * 1024)}MB free.")
+            markTaskFailed(task, safeFileName, "Insufficient storage: less than 50MB free space available.")
+            return@withContext
+        }
         val processId = "dl_${task.entityId}_${System.currentTimeMillis()}"
+
         currentProcessId = processId
         currentRunningTaskId = task.entityId
         isCancelled = false
@@ -472,6 +634,7 @@ class DownloadEngine private constructor(private val context: Context) {
         // Cache thumbnail locally so offline viewing in Downloads tab has reliable original art
         val localThumbPath = cacheThumbnailLocally(task.thumbnailUrl, safeTitle)
 
+        // START LIFECYCLE: Task becomes RUNNING, sole owner of active progress and state
         updateCard(task.entityId) {
             it.copy(
                 fileName = safeFileName,
@@ -479,8 +642,11 @@ class DownloadEngine private constructor(private val context: Context) {
                 speed = "Starting...",
                 eta = "",
                 isRunning = true,
+                isVerifying = false,
                 isCompleted = false,
                 isFailed = false,
+                isCancelled = false,
+                isPaused = false,
                 thumbnailUrl = localThumbPath ?: task.thumbnailUrl,
                 duration = task.duration,
                 mediaType = task.mediaType,
@@ -488,116 +654,239 @@ class DownloadEngine private constructor(private val context: Context) {
                 queueTotal = task.queueTotal
             )
         }
+        _activeDownload.value = _downloadCards.value.firstOrNull { it.id == task.entityId }
 
         try {
-            val sanitizedUrl = sanitizeUrlInput(task.url)
+            task.repository.updateDownloadStatus(task.entityId, "DOWNLOADING", 0)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating START status in Room: ${e.message}")
+        }
 
-            if (isDirectMediaUrl(sanitizedUrl) || task.formatId == "direct") {
-                Log.i(TAG, "Starting direct media download for: $sanitizedUrl")
-                val directSuccess = runDirectDownload(sanitizedUrl, outputFile)
-                if (!directSuccess && !isCancelled) {
-                    markTaskFailed(task, safeFileName, "Direct stream download failed")
-                    return@withContext
-                }
-            } else {
-                ensureEngineInitialized()
-                Log.d(TAG, "Executing YoutubeDL download for: $sanitizedUrl with formatId: ${task.formatId}")
+        val sanitizedUrl = sanitizeUrlInput(task.url)
+        val isDirect = isDirectMediaUrl(sanitizedUrl) || task.formatId == "direct"
 
-                val request = YoutubeDLRequest(sanitizedUrl).apply {
-                    addOption("-o", outputFile.absolutePath)
-                    addOption("--no-mtime")
-                    addOption("--no-playlist")
-                    addOption("--no-part")
-                    addOption("--no-warnings")
-                    addOption("--no-update")
-                    addOption("--no-check-certificates")
-                    addOption("--geo-bypass")
-                    if (isYouTubeUrl(sanitizedUrl)) {
-                        addOption("--extractor-args", "youtube:player_client=android,web,web_creator,mweb")
-                        addOption("--user-agent", "Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0")
-                    } else if (isDailymotionUrl(sanitizedUrl)) {
-                        addOption("--referer", "https://www.dailymotion.com/")
-                        addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-                    } else if (isBilibiliUrl(sanitizedUrl)) {
-                        addOption("--referer", "https://www.bilibili.com/")
-                        addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-                    } else {
-                        // Concurrency optimization for high download speed without server throttling
-                        addOption("-N", "4")
-                        addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-                    }
-                    addOption("--buffer-size", "64k")
-                    addOption("--retries", "3")
-                    addOption("--socket-timeout", "15")
+        var attempt = 0
+        val maxRetries = 2
+        var downloadSuccess = false
 
-                    if (task.mediaType == "AUDIO") {
-                        addOption("-f", "bestaudio/best")
-                        addOption("-x")
-                        addOption("--audio-format", "mp3")
-                        val bitrate = task.audioBitrate.replace("kbps", "").trim().ifEmpty { "192" }
-                        addOption("--audio-quality", "${bitrate}K")
-                    } else {
-                        val fmt = task.formatId
-                        val selector = if (fmt.isNotEmpty() && fmt != "direct") {
-                            if (fmt.contains("+") || fmt.contains("/")) {
-                                fmt
-                            } else if (fmt.all { it.isDigit() }) {
-                                "$fmt+bestaudio/best"
-                            } else if (fmt.contains("p")) {
-                                val h = fmt.replace("p", "").replace(" HDR", "").trim()
-                                "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best"
-                            } else if (fmt == "HIGH") {
-                                "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-                            } else if (fmt == "LOW") {
-                                "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
-                            } else {
-                                "$fmt+bestaudio/best"
-                            }
-                        } else {
-                            val h = Regex("\\d+").find(task.resolution)?.value ?: "720"
-                            "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best"
-                        }
-                        addOption("-f", selector)
-                        addOption("--merge-output-format", "mp4")
-                    }
-                }
-
-                YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
-                    if (!isCancelled) {
-                        val p = progress.toInt().coerceIn(0, 100)
-                        val spd = extractSpeed(line)
-                        updateCard(task.entityId) { card ->
-                            card.copy(
-                                progress = p,
-                                speed = if (p >= 100) "Processing..." else spd,
-                                eta = if (etaInSeconds > 0 && p < 100) "${etaInSeconds}s" else ""
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (isCancelled) {
-                handleCancellation(task, downloadDir, safeFileName)
+        while (attempt <= maxRetries && !downloadSuccess && !isCancelled && !cancelledTaskIds.contains(task.entityId)) {
+            if (pausedTaskIds.contains(task.entityId)) {
+                handlePause(task, stagingDir)
                 return@withContext
             }
 
-            // Identify actual output file created
-            val actualFile = if (outputFile.exists() && outputFile.length() > 0) {
-                outputFile
-            } else {
-                val possibleFiles = downloadDir.listFiles()?.filter {
-                    it.name.startsWith(safeTitle) && it.length() > 0 &&
-                    !it.name.endsWith(".part") && !it.name.endsWith(".ytdl")
+            try {
+                if (isDirect) {
+                    Log.i(TAG, "Starting direct media download for: $sanitizedUrl (attempt $attempt)")
+                    val tempDirectFile = File(stagingDir, "${safeTitle}_${task.entityId}_direct_temp.$extension")
+                    val directOk = runDirectDownload(task, sanitizedUrl, tempDirectFile)
+                    if (!directOk) {
+                        if (isCancelled || cancelledTaskIds.contains(task.entityId)) {
+                            handleCancellation(task, stagingDir, downloadDir, safeFileName)
+                            return@withContext
+                        }
+                        if (pausedTaskIds.contains(task.entityId)) {
+                            handlePause(task, stagingDir)
+                            return@withContext
+                        }
+                        throw java.io.IOException("Direct stream download returned false")
+                    }
+
+                    // Enter VERIFYING state
+                    updateCard(task.entityId) {
+                        it.copy(progress = 100, speed = "Verifying...", isVerifying = true)
+                    }
+                    try {
+                        task.repository.updateDownloadStatus(task.entityId, "VERIFYING", 100)
+                    } catch (e: Exception) {}
+
+                    val valid = validateDownloadedMedia(tempDirectFile, downloadDir, task.mediaType)
+                    if (valid) {
+                        val moved = if (tempDirectFile.renameTo(finalOutputFile)) {
+                            true
+                        } else {
+                            FileInputStream(tempDirectFile).use { input ->
+                                FileOutputStream(finalOutputFile).use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            tempDirectFile.delete()
+                            true
+                        }
+                        if (moved && finalOutputFile.exists() && finalOutputFile.length() > 0 &&
+                            isInsideAllowedDirectory(finalOutputFile, downloadDir)) {
+                            downloadSuccess = true
+                            break
+                        }
+                    }
+                    throw java.io.IOException("Direct stream output validation failed")
+                } else {
+                    ensureEngineInitialized()
+                    Log.d(TAG, "Executing YoutubeDL download for: $sanitizedUrl with formatId: ${task.formatId} (attempt $attempt)")
+
+                    val tempStagingPrefix = "${safeTitle}_${task.entityId}_staging"
+                    val request = YoutubeDLRequest(sanitizedUrl).apply {
+                        addOption("-o", "${stagingDir.absolutePath}/$tempStagingPrefix.%(ext)s")
+                        addOption("--no-mtime")
+                        addOption("--no-playlist")
+                        addOption("--no-warnings")
+                        addOption("--no-update")
+                        addOption("--geo-bypass")
+                        if (isYouTubeUrl(sanitizedUrl)) {
+                            addOption("--extractor-args", "youtube:player_client=android,web,web_creator,mweb")
+                            addOption("--user-agent", "Mozilla/5.0 (Linux; Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0")
+                        } else if (isDailymotionUrl(sanitizedUrl)) {
+                            addOption("--referer", "https://www.dailymotion.com/")
+                            addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                        } else if (isBilibiliUrl(sanitizedUrl)) {
+                            addOption("--referer", "https://www.bilibili.com/")
+                            addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+                        } else {
+                            addOption("-N", "4")
+                            addOption("--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+                        }
+                        addOption("--buffer-size", "64k")
+                        addOption("--retries", "3")
+                        addOption("--socket-timeout", "15")
+
+                        if (task.mediaType == "AUDIO") {
+                            addOption("-f", "bestaudio/best")
+                            addOption("-x")
+                            addOption("--audio-format", "mp3")
+                            val bitrate = task.audioBitrate.replace("kbps", "").trim().ifEmpty { "192" }
+                            addOption("--audio-quality", "${bitrate}K")
+                        } else {
+                            val fmt = task.formatId
+                            val selector = if (fmt.isNotEmpty() && fmt != "direct") {
+                                if (fmt.contains("+") || fmt.contains("/")) {
+                                    fmt
+                                } else if (fmt.all { it.isDigit() }) {
+                                    "$fmt+bestaudio/best"
+                                } else if (fmt.contains("p")) {
+                                    val h = fmt.replace("p", "").replace(" HDR", "").trim()
+                                    "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best"
+                                } else if (fmt == "HIGH") {
+                                    "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+                                } else if (fmt == "LOW") {
+                                    "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+                                } else {
+                                    "$fmt+bestaudio/best"
+                                }
+                            } else {
+                                val h = Regex("\\d+").find(task.resolution)?.value ?: "720"
+                                "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best"
+                            }
+                            addOption("-f", selector)
+                            addOption("--merge-output-format", "mp4")
+                        }
+                    }
+
+                    var lastYtdlRoomUpdate = System.currentTimeMillis()
+                    YoutubeDL.getInstance().execute(request, processId) { progress, etaInSeconds, line ->
+                        if (!isCancelled && !cancelledTaskIds.contains(task.entityId) && !pausedTaskIds.contains(task.entityId)) {
+                            val p = progress.toInt().coerceIn(0, 100)
+                            val spd = extractSpeed(line)
+                            updateCard(task.entityId) { card ->
+                                card.copy(
+                                    progress = p,
+                                    speed = if (p >= 100) "Processing..." else spd,
+                                    eta = if (etaInSeconds > 0 && p < 100) "${etaInSeconds}s" else ""
+                                )
+                            }
+                            val now = System.currentTimeMillis()
+                            if (now - lastYtdlRoomUpdate >= 1000) {
+                                lastYtdlRoomUpdate = now
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        task.repository.updateDownloadProgress(task.entityId, p, 0L, 0L)
+                                    } catch (ignored: Exception) {}
+                                }
+                            }
+                        }
+                    }
+
+                    if (isCancelled || cancelledTaskIds.contains(task.entityId)) {
+                        handleCancellation(task, stagingDir, downloadDir, safeFileName)
+                        return@withContext
+                    }
+
+                    if (pausedTaskIds.contains(task.entityId)) {
+                        handlePause(task, stagingDir)
+                        return@withContext
+                    }
+
+                    // Enter VERIFYING state
+                    updateCard(task.entityId) {
+                        it.copy(progress = 100, speed = "Verifying...", isVerifying = true)
+                    }
+                    try {
+                        task.repository.updateDownloadStatus(task.entityId, "VERIFYING", 100)
+                    } catch (e: Exception) {}
+
+                    // Find completed merged file in stagingDir
+                    val stagedCandidate = stagingDir.listFiles()?.filter {
+                        it.name.startsWith(tempStagingPrefix) && it.isFile && it.length() > 0 &&
+                        !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.endsWith(".temp")
+                    }?.maxByOrNull { it.lastModified() }
+
+                    if (stagedCandidate != null && validateDownloadedMedia(stagedCandidate, downloadDir, task.mediaType)) {
+                        val moved = if (stagedCandidate.renameTo(finalOutputFile)) {
+                            true
+                        } else {
+                            FileInputStream(stagedCandidate).use { input ->
+                                FileOutputStream(finalOutputFile).use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            stagedCandidate.delete()
+                            true
+                        }
+                        if (moved && finalOutputFile.exists() && finalOutputFile.length() > 0 &&
+                            isInsideAllowedDirectory(finalOutputFile, downloadDir)) {
+                            downloadSuccess = true
+                            break
+                        }
+                    }
+
+                    throw java.io.IOException("Staged output validation or move failed")
                 }
-                possibleFiles?.maxByOrNull { it.lastModified() } ?: outputFile
+            } catch (e: Exception) {
+                if (isCancelled || cancelledTaskIds.contains(task.entityId)) {
+                    handleCancellation(task, stagingDir, downloadDir, safeFileName)
+                    return@withContext
+                }
+                if (pausedTaskIds.contains(task.entityId)) {
+                    handlePause(task, stagingDir)
+                    return@withContext
+                }
+                if (attempt < maxRetries && isRecoverableError(e)) {
+                    attempt++
+                    Log.i(TAG, "Encountered recoverable error for ${task.title}: ${e.message}. Retrying ($attempt/$maxRetries)...")
+                    updateCard(task.entityId) {
+                        it.copy(
+                            speed = "Retrying ($attempt/$maxRetries)...",
+                            isVerifying = false
+                        )
+                    }
+                    kotlinx.coroutines.delay(attempt * 1000L)
+                    continue
+                } else {
+                    cleanupTaskTempFiles(stagingDir, task.entityId)
+                    Log.e(TAG, "Download execution stopped for ${task.title}", e)
+                    val isNetError = isRecoverableError(e)
+                    if (isNetError) {
+                        markTaskInterruptedNetwork(task, safeFileName, e.message ?: "Network connection lost", stagingDir)
+                    } else {
+                        markTaskFailed(task, safeFileName, e.message ?: "Download execution failed")
+                    }
+                    break
+                }
             }
+        }
 
-            // Strict validation of the real downloaded media
-            val isValid = validateDownloadedMedia(actualFile, task.mediaType)
-
-            if (isValid) {
-                val fileSize = actualFile.length()
+        try {
+            if (downloadSuccess && finalOutputFile.exists() && finalOutputFile.length() > 0) {
+                val fileSize = finalOutputFile.length()
                 val formattedSize = formatFileSize(fileSize)
                 val finalThumb = localThumbPath ?: task.thumbnailUrl
 
@@ -605,8 +894,8 @@ class DownloadEngine private constructor(private val context: Context) {
                     id = task.entityId,
                     url = task.url,
                     title = task.title,
-                    fileName = actualFile.name,
-                    filePath = actualFile.absolutePath,
+                    fileName = finalOutputFile.name,
+                    filePath = finalOutputFile.absolutePath,
                     fileSizeBytes = fileSize,
                     formattedSize = formattedSize,
                     duration = task.duration,
@@ -616,55 +905,53 @@ class DownloadEngine private constructor(private val context: Context) {
                     status = "COMPLETED",
                     progress = 100,
                     relativeDate = "Today",
-                    timestamp = System.currentTimeMillis()
+                    timestamp = System.currentTimeMillis(),
+                    downloadedBytes = fileSize,
+                    totalBytes = fileSize,
+                    isResumable = true,
+                    tempFilePath = ""
                 )
-                // Persist strictly upon verified completion
                 task.repository.insertOrUpdateDownload(completedEntity)
-                Log.i(TAG, "Download finished successfully and verified: ${actualFile.name} ($formattedSize)")
+                Log.i(TAG, "Download finished successfully and verified: ${finalOutputFile.name} ($formattedSize)")
 
-                // Trigger background notification if app is in background/closed
                 com.example.util.NotificationHelper.showDownloadCompleteNotification(
                     context = context,
                     title = "Download Complete",
-                    body = "Video download successful. Please check the Downloads section."
+                    body = "${task.title} downloaded successfully. Please check the Downloads section.",
+                    taskId = task.entityId
                 )
 
-                // Update card state to successful completed state
                 updateCard(task.entityId) {
                     it.copy(
                         title = task.title,
-                        fileName = actualFile.name,
+                        fileName = finalOutputFile.name,
                         progress = 100,
                         speed = "",
                         eta = "",
                         isRunning = false,
+                        isVerifying = false,
                         isCompleted = true,
                         isFailed = false,
+                        isPaused = false,
                         thumbnailUrl = finalThumb,
                         duration = task.duration,
                         formattedSize = formattedSize,
-                        filePath = actualFile.absolutePath,
+                        filePath = finalOutputFile.absolutePath,
                         mediaType = task.mediaType,
                         queueIndex = task.queueIndex,
-                        queueTotal = task.queueTotal
+                        queueTotal = task.queueTotal,
+                        downloadedBytes = fileSize,
+                        totalBytes = fileSize
                     )
                 }
-            } else {
-                Log.e(TAG, "Output validation failed for ${task.title}. Marking as FAILED.")
-                if (actualFile.exists() && actualFile.length() == 0L) {
-                    actualFile.delete()
-                }
+            } else if (!isCancelled && !cancelledTaskIds.contains(task.entityId) && !pausedTaskIds.contains(task.entityId) && !downloadSuccess) {
                 markTaskFailed(task, safeFileName, "Validation failed: output media is invalid or empty")
             }
-        } catch (e: Exception) {
-            if (isCancelled) {
-                handleCancellation(task, downloadDir, safeFileName)
-                return@withContext
-            }
-            Log.e(TAG, "Download execution failed for ${task.title}", e)
-            markTaskFailed(task, safeFileName, e.message ?: "Download execution failed")
         } finally {
-            cleanupTempFiles(downloadDir, safeFileName)
+            if (!pausedTaskIds.contains(task.entityId)) {
+                cleanupTaskTempFiles(stagingDir, task.entityId)
+                cleanupTempFiles(downloadDir, safeFileName)
+            }
             currentProcessId = null
             currentRunningTaskId = null
         }
@@ -687,18 +974,364 @@ class DownloadEngine private constructor(private val context: Context) {
     }
 
     fun cancelDownload(id: Long) {
+        cancelledTaskIds.add(id)
+        pausedTaskIds.remove(id)
+        queuedTasks.removeIf { it.entityId == id }
+
         if (currentRunningTaskId == id) {
-            cancelActiveDownload()
+            isCancelled = true
+            currentProcessId?.let { pid ->
+                try {
+                    YoutubeDL.getInstance().destroyProcessById(pid)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error destroying YoutubeDL process: ${e.message}")
+                }
+            }
         }
-        dismissCard(id)
+
+        updateCard(id) {
+            it.copy(
+                isRunning = false,
+                isVerifying = false,
+                isCancelled = true,
+                isPaused = false,
+                speed = "Cancelled",
+                progress = 0
+            )
+        }
+
+        val downloadDir = getDownloadDirectory()
+        val stagingDir = File(downloadDir, ".staging")
+        cleanupTaskTempFiles(stagingDir, id)
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                (context.applicationContext as? com.example.StreamCleanApplication)?.repository?.updateDownloadStatus(id, "CANCELLED", 0)
+            } catch (e: Exception) {
+                Log.w(TAG, "Error updating cancelled status in Room: ${e.message}")
+            }
+        }
+
+        if (_activeDownload.value?.id == id) {
+            _activeDownload.value = null
+        }
+    }
+
+    fun cancelActiveDownload() {
+        val runningId = currentRunningTaskId
+        if (runningId != null) {
+            cancelDownload(runningId)
+        } else {
+            isCancelled = true
+            currentProcessId?.let { pid ->
+                try {
+                    YoutubeDL.getInstance().destroyProcessById(pid)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error destroying YoutubeDL process: ${e.message}")
+                }
+            }
+            _activeDownload.value = null
+        }
+    }
+
+    fun pauseDownload(id: Long) {
+        pausedTaskIds.add(id)
+        queuedTasks.removeIf { it.entityId == id }
+
+        if (currentRunningTaskId == id) {
+            currentProcessId?.let { pid ->
+                try {
+                    YoutubeDL.getInstance().destroyProcessById(pid)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping process on pause: ${e.message}")
+                }
+            }
+        }
+
+        val card = _downloadCards.value.firstOrNull { it.id == id }
+        updateCard(id) {
+            it.copy(
+                isRunning = false,
+                isVerifying = false,
+                isPaused = true,
+                speed = "Paused"
+            )
+        }
+
+        scope.launch(Dispatchers.IO) {
+            try {
+                val app = context.applicationContext as? com.example.StreamCleanApplication
+                app?.repository?.updateDownloadStatusDetails(
+                    id = id,
+                    status = "PAUSED",
+                    progress = card?.progress ?: 0,
+                    error = "Paused by user"
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Error updating paused status in Room: ${e.message}")
+            }
+        }
+
+        if (_activeDownload.value?.id == id) {
+            _activeDownload.value = null
+        }
+    }
+
+    fun pauseActiveDownload() {
+        val runningId = currentRunningTaskId
+        if (runningId != null) {
+            pauseDownload(runningId)
+        }
+    }
+
+    fun resumeTask(id: Long) {
+        pausedTaskIds.remove(id)
+        cancelledTaskIds.remove(id)
+
+        scope.launch(Dispatchers.IO) {
+            val app = context.applicationContext as? com.example.StreamCleanApplication
+            val repo = app?.repository ?: return@launch
+            val entity = repo.getDownloadById(id) ?: return@launch
+
+            if (entity.status == "COMPLETED") {
+                Log.i(TAG, "Task $id already completed, ignoring resume.")
+                return@launch
+            }
+
+            updateCard(id) {
+                it.copy(
+                    isRunning = false,
+                    isVerifying = false,
+                    isPaused = false,
+                    isFailed = false,
+                    isCancelled = false,
+                    speed = "Resuming..."
+                )
+            }
+
+            enqueueDownload(
+                entityId = entity.id,
+                url = entity.url,
+                title = entity.title,
+                mediaType = entity.mediaType,
+                resolution = entity.resolution,
+                formatId = entity.formatId,
+                audioBitrate = entity.audioBitrate,
+                thumbnailUrl = entity.thumbnailUri,
+                duration = entity.duration,
+                queueIndex = 1,
+                queueTotal = 1,
+                repository = repo
+            )
+
+            withContext(Dispatchers.Main) {
+                com.example.service.DownloadService.start(context)
+            }
+        }
+    }
+
+    suspend fun recoverInterruptedDownloads(targetRepository: DownloadRepository? = null) = withContext(Dispatchers.IO) {
+        val repo = targetRepository ?: (context.applicationContext as? com.example.StreamCleanApplication)?.repository ?: return@withContext
+        val interrupted = repo.getInterruptedDownloads()
+        if (interrupted.isEmpty()) return@withContext
+
+        Log.i(TAG, "Found ${interrupted.size} interrupted downloads to inspect and recover")
+
+        val downloadDir = getDownloadDirectory()
+
+        for (item in interrupted) {
+            // 1. If it was in VERIFYING state when killed:
+            if (item.status == "VERIFYING") {
+                val safeTitle = sanitizeFileName(item.title).take(60)
+                val extension = if (item.mediaType == "AUDIO") "mp3" else "mp4"
+                val safeFileName = "${safeTitle}_${item.id % 100000}.$extension"
+                val finalOutputFile = File(downloadDir, safeFileName)
+
+                if (finalOutputFile.exists() && finalOutputFile.length() > 0 &&
+                    validateDownloadedMedia(finalOutputFile, downloadDir, item.mediaType)) {
+                    // Valid complete file found! Mark as COMPLETED!
+                    val completedEntity = item.copy(
+                        fileName = safeFileName,
+                        filePath = finalOutputFile.absolutePath,
+                        fileSizeBytes = finalOutputFile.length(),
+                        formattedSize = formatFileSize(finalOutputFile.length()),
+                        status = "COMPLETED",
+                        progress = 100,
+                        errorMessage = "",
+                        downloadedBytes = finalOutputFile.length(),
+                        totalBytes = finalOutputFile.length(),
+                        isResumable = true,
+                        tempFilePath = ""
+                    )
+                    repo.insertOrUpdateDownload(completedEntity)
+                    Log.i(TAG, "Interrupted VERIFYING task ${item.id} successfully recovered as COMPLETED: $safeFileName")
+                    continue
+                }
+            }
+
+            // 2. For DOWNLOADING, PENDING, or unverified VERIFYING:
+            // Do NOT claim universal byte-level resume.
+            // Never expose corrupted partial files as completed.
+            // Detect stale state, preserve existing valid partial files if present, and transition to PAUSED.
+            val tempFile = if (item.tempFilePath.isNotEmpty()) File(item.tempFilePath) else null
+            val hasPartial = tempFile?.exists() == true && tempFile.length() > 0
+
+            repo.updateDownloadStatusDetails(
+                id = item.id,
+                status = "PAUSED",
+                progress = item.progress.coerceIn(0, 99),
+                error = "Interrupted by system or process termination",
+                tempFilePath = item.tempFilePath
+            )
+
+            val pausedCard = ActiveDownloadState(
+                id = item.id,
+                url = item.url,
+                title = item.title,
+                fileName = item.fileName,
+                progress = item.progress.coerceIn(0, 99),
+                speed = if (hasPartial) "Paused (partial file saved)" else "Paused (tap to resume)",
+                eta = "",
+                isRunning = false,
+                isCompleted = false,
+                isFailed = false,
+                isCancelled = false,
+                isVerifying = false,
+                isPaused = true,
+                downloadedBytes = item.downloadedBytes,
+                totalBytes = item.totalBytes,
+                errorMessage = "Interrupted by system or process termination",
+                thumbnailUrl = item.thumbnailUri,
+                duration = item.duration,
+                formattedSize = item.formattedSize,
+                filePath = item.filePath,
+                mediaType = item.mediaType,
+                queueIndex = 1,
+                queueTotal = 1
+            )
+
+            _downloadCards.value = _downloadCards.value.filter { it.id != item.id } + pausedCard
+            Log.i(TAG, "Stale download ${item.id} (${item.title}) recovered and marked as PAUSED")
+        }
+    }
+
+    private suspend fun handleQueuedCancellation(task: DownloadTask) {
+        try {
+            task.repository.updateDownloadStatus(task.entityId, "CANCELLED", 0)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating queued cancelled task in Room: ${e.message}")
+        }
+        updateCard(task.entityId) {
+            it.copy(
+                isRunning = false,
+                isVerifying = false,
+                isCancelled = true,
+                isCompleted = false,
+                isFailed = false,
+                isPaused = false,
+                speed = "Cancelled",
+                progress = 0
+            )
+        }
+        if (_activeDownload.value?.id == task.entityId) {
+            _activeDownload.value = null
+        }
+    }
+
+    private suspend fun handleQueuedPause(task: DownloadTask) {
+        try {
+            task.repository.updateDownloadStatusDetails(
+                id = task.entityId,
+                status = "PAUSED",
+                progress = 0,
+                error = "Paused while queued"
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating queued paused task in Room: ${e.message}")
+        }
+        updateCard(task.entityId) {
+            it.copy(
+                isRunning = false,
+                isVerifying = false,
+                isPaused = true,
+                isCancelled = false,
+                isCompleted = false,
+                isFailed = false,
+                speed = "Paused",
+                progress = 0
+            )
+        }
+        if (_activeDownload.value?.id == task.entityId) {
+            _activeDownload.value = null
+        }
+    }
+
+    private suspend fun handlePause(task: DownloadTask, stagingDir: File) {
+        val card = _downloadCards.value.firstOrNull { it.id == task.entityId }
+        val prog = card?.progress ?: 0
+        updateCard(task.entityId) {
+            it.copy(
+                isRunning = false,
+                isVerifying = false,
+                isPaused = true,
+                speed = "Paused"
+            )
+        }
+        try {
+            task.repository.updateDownloadStatusDetails(
+                id = task.entityId,
+                status = "PAUSED",
+                progress = prog,
+                error = "Paused by user",
+                tempFilePath = stagingDir.absolutePath
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating paused status in Room: ${e.message}")
+        }
+        if (_activeDownload.value?.id == task.entityId) {
+            _activeDownload.value = null
+        }
+    }
+
+    private suspend fun markTaskInterruptedNetwork(task: DownloadTask, fileName: String, errorReason: String, stagingDir: File) {
+        val card = _downloadCards.value.firstOrNull { it.id == task.entityId }
+        val prog = card?.progress ?: 0
+        try {
+            task.repository.updateDownloadStatusDetails(
+                id = task.entityId,
+                status = "PAUSED",
+                progress = prog,
+                error = "Network connection lost. Tap to resume.",
+                tempFilePath = stagingDir.absolutePath
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error updating network interrupted status in Room: ${e.message}")
+        }
+        updateCard(task.entityId) {
+            it.copy(
+                fileName = fileName,
+                progress = prog,
+                speed = "Network lost (tap to resume)",
+                eta = "",
+                isRunning = false,
+                isVerifying = false,
+                isCompleted = false,
+                isFailed = false,
+                isPaused = true,
+                errorMessage = "Network connection lost: $errorReason"
+            )
+        }
+        if (_activeDownload.value?.id == task.entityId) {
+            _activeDownload.value = null
+        }
+        Log.w(TAG, "Task ${task.title} interrupted due to network error. Marked as PAUSED for safe resume.")
     }
 
     private suspend fun markTaskFailed(task: DownloadTask, fileName: String, errorReason: String) {
-        // Ensure failed tasks are NEVER stored in persistent Downloads
         try {
-            task.repository.deleteById(task.entityId)
+            task.repository.updateDownloadStatus(task.entityId, "FAILED", 0)
         } catch (e: Exception) {
-            Log.w(TAG, "Error cleaning failed download entity from DB: ${e.message}")
+            Log.w(TAG, "Error updating failed status in Room: ${e.message}")
         }
         updateCard(task.entityId) {
             it.copy(
@@ -707,8 +1340,10 @@ class DownloadEngine private constructor(private val context: Context) {
                 speed = "",
                 eta = "",
                 isRunning = false,
+                isVerifying = false,
                 isCompleted = false,
                 isFailed = true,
+                isPaused = false,
                 errorMessage = errorReason,
                 thumbnailUrl = task.thumbnailUrl,
                 duration = task.duration,
@@ -717,25 +1352,52 @@ class DownloadEngine private constructor(private val context: Context) {
                 queueTotal = task.queueTotal
             )
         }
+        if (_activeDownload.value?.id == task.entityId) {
+            _activeDownload.value = null
+        }
+        com.example.util.NotificationHelper.showDownloadFailedNotification(
+            context = context,
+            title = task.title,
+            errorMessage = errorReason,
+            taskId = task.entityId
+        )
         Log.w(TAG, "Task marked as FAILED for ${task.title}: $errorReason")
     }
 
-    private suspend fun handleCancellation(task: DownloadTask, downloadDir: File, safeFileName: String) {
+    private suspend fun handleCancellation(task: DownloadTask, stagingDir: File, downloadDir: File, safeFileName: String) {
+        cleanupTaskTempFiles(stagingDir, task.entityId)
         cleanupTempFiles(downloadDir, safeFileName)
         val file = File(downloadDir, safeFileName)
         if (file.exists()) file.delete()
+
         try {
-            task.repository.deleteById(task.entityId)
+            task.repository.updateDownloadStatus(task.entityId, "CANCELLED", 0)
         } catch (e: Exception) {
-            Log.w(TAG, "Error deleting cancelled task from DB: ${e.message}")
+            Log.w(TAG, "Error updating cancelled status in Room: ${e.message}")
         }
-        _downloadCards.value = _downloadCards.value.filter { it.id != task.entityId }
+        updateCard(task.entityId) {
+            it.copy(
+                isRunning = false,
+                isVerifying = false,
+                isCancelled = true,
+                isCompleted = false,
+                isFailed = false,
+                isPaused = false,
+                speed = "Cancelled",
+                progress = 0
+            )
+        }
         if (_activeDownload.value?.id == task.entityId) {
-            _activeDownload.value = _downloadCards.value.firstOrNull { it.isRunning }
+            _activeDownload.value = null
         }
+        com.example.util.NotificationHelper.showDownloadCancelledNotification(
+            context = context,
+            title = task.title,
+            taskId = task.entityId
+        )
     }
 
-    private suspend fun runDirectDownload(urlStr: String, targetFile: File): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun runDirectDownload(task: DownloadTask, urlStr: String, targetFile: File): Boolean = withContext(Dispatchers.IO) {
         var connection: HttpURLConnection? = null
         try {
             if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) {
@@ -747,6 +1409,9 @@ class DownloadEngine private constructor(private val context: Context) {
             var redirectCount = 0
             val maxRedirects = 5
 
+            val existingBytes = if (targetFile.exists()) targetFile.length() else 0L
+            var isResume = false
+
             while (redirectCount < maxRedirects) {
                 val url = URL(currentUrl)
                 connection = (url.openConnection() as HttpURLConnection).apply {
@@ -754,6 +1419,10 @@ class DownloadEngine private constructor(private val context: Context) {
                     readTimeout = 30000
                     instanceFollowRedirects = true
                     setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile)")
+                    if (existingBytes > 0) {
+                        setRequestProperty("Range", "bytes=$existingBytes-")
+                        Log.i(TAG, "Attempting HTTP Range resume from byte $existingBytes for ${targetFile.name}")
+                    }
                 }
                 connection.connect()
                 val responseCode = connection.responseCode
@@ -768,8 +1437,29 @@ class DownloadEngine private constructor(private val context: Context) {
                     }
                 }
 
-                if (responseCode !in 200..299) {
-                    Log.e(TAG, "Direct download HTTP error response code: $responseCode")
+                if (responseCode == 416) {
+                    // Range Not Satisfiable: file on server was modified or range invalid. Reset and retry from byte 0.
+                    Log.w(TAG, "HTTP 416 Range Not Satisfiable. Resetting partial file.")
+                    targetFile.delete()
+                    connection.disconnect()
+                    connection = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 15000
+                        readTimeout = 30000
+                        instanceFollowRedirects = true
+                        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile)")
+                    }
+                    connection.connect()
+                }
+
+                val finalCode = connection.responseCode
+                if (finalCode == 206) {
+                    isResume = true
+                    Log.i(TAG, "Server accepted byte Range (HTTP 206 Partial Content). Resuming download.")
+                } else if (finalCode in 200..299) {
+                    isResume = false
+                    Log.i(TAG, "Server returned HTTP $finalCode. Starting/overwriting from byte 0.")
+                } else {
+                    Log.e(TAG, "Direct download HTTP error response code: $finalCode")
                     return@withContext false
                 }
                 break
@@ -782,19 +1472,25 @@ class DownloadEngine private constructor(private val context: Context) {
                 return@withContext false
             }
 
-            val totalLength = conn.contentLengthLong
-            var downloadedBytes = 0L
+            val contentLength = conn.contentLengthLong
+            val totalLength = if (isResume && contentLength > 0) existingBytes + contentLength else if (contentLength > 0) contentLength else 0L
+            var downloadedBytes = if (isResume) existingBytes else 0L
 
             conn.inputStream.use { input ->
-                FileOutputStream(targetFile).use { output ->
+                FileOutputStream(targetFile, isResume).use { output ->
                     val buffer = ByteArray(32768)
                     var bytesRead: Int
                     var lastUpdate = System.currentTimeMillis()
+                    var lastRoomUpdate = System.currentTimeMillis()
                     var bytesSinceLastUpdate = 0L
 
                     while (input.read(buffer).also { bytesRead = it } != -1) {
-                        if (isCancelled) {
+                        if (isCancelled || cancelledTaskIds.contains(task.entityId)) {
                             targetFile.delete()
+                            return@withContext false
+                        }
+                        if (pausedTaskIds.contains(task.entityId)) {
+                            // Preserve partial file on pause!
                             return@withContext false
                         }
                         output.write(buffer, 0, bytesRead)
@@ -813,26 +1509,38 @@ class DownloadEngine private constructor(private val context: Context) {
                                 "${(totalLength - downloadedBytes) / speedBps}s"
                             } else ""
 
-                            _activeDownload.value = _activeDownload.value?.copy(
-                                progress = prog,
-                                speed = speedStr,
-                                eta = etaStr
-                            )
+                            updateCard(task.entityId) { card ->
+                                card.copy(
+                                    progress = prog,
+                                    speed = speedStr,
+                                    eta = etaStr,
+                                    downloadedBytes = downloadedBytes,
+                                    totalBytes = totalLength
+                                )
+                            }
                             lastUpdate = now
                             bytesSinceLastUpdate = 0L
+
+                            // Persist throttled progress to Room every ~1000ms
+                            if (now - lastRoomUpdate >= 1000) {
+                                lastRoomUpdate = now
+                                try {
+                                    task.repository.updateDownloadProgress(task.entityId, prog, downloadedBytes, totalLength)
+                                } catch (ignored: Exception) {}
+                            }
                         }
                     }
                 }
             }
 
             val valid = targetFile.exists() && targetFile.length() > 0 && (totalLength <= 0 || targetFile.length() == totalLength)
-            if (!valid && targetFile.exists()) {
+            if (!valid && !pausedTaskIds.contains(task.entityId) && targetFile.exists()) {
                 targetFile.delete()
             }
             return@withContext valid
         } catch (e: Exception) {
             Log.e(TAG, "Direct download failed", e)
-            if (targetFile.exists()) {
+            if (!pausedTaskIds.contains(task.entityId) && targetFile.exists() && targetFile.length() == 0L) {
                 targetFile.delete()
             }
             return@withContext false
@@ -843,9 +1551,22 @@ class DownloadEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun validateDownloadedMedia(file: File, expectedMediaType: String): Boolean {
+    fun validateDownloadedMedia(file: File, downloadDir: File, expectedMediaType: String): Boolean {
         if (!file.exists() || !file.isFile || file.length() <= 0) {
             Log.e(TAG, "Media validation failed: file does not exist or is empty (${file.absolutePath})")
+            return false
+        }
+
+        // Canonical path check ensuring file is inside allowed directory
+        if (!isInsideAllowedDirectory(file, downloadDir)) {
+            Log.e(TAG, "Media validation failed: file is outside allowed directory (${file.canonicalPath})")
+            return false
+        }
+
+        // Incomplete .part / .ytdl / .temp files are strictly NOT valid completed files
+        val name = file.name.lowercase()
+        if (name.endsWith(".part") || name.endsWith(".ytdl") || name.endsWith(".temp") || name.endsWith(".tmp")) {
+            Log.e(TAG, "Media validation failed: incomplete .part or temp file detected: $name")
             return false
         }
 
@@ -885,6 +1606,31 @@ class DownloadEngine private constructor(private val context: Context) {
         return true
     }
 
+    fun isInsideAllowedDirectory(file: File, allowedDir: File): Boolean {
+        return try {
+            val canonicalFile = file.canonicalFile.toPath()
+            val canonicalDir = allowedDir.canonicalFile.toPath()
+            canonicalFile.startsWith(canonicalDir)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun cleanupTaskTempFiles(directory: File, entityId: Long) {
+        try {
+            directory.listFiles()?.forEach { file ->
+                val name = file.name
+                if (name.contains(entityId.toString()) &&
+                    (name.endsWith(".part") || name.endsWith(".ytdl") || name.endsWith(".temp") || name.endsWith(".tmp") ||
+                     name.contains("_staging") || name.contains("_direct_temp"))) {
+                    file.delete()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cleaning task temp files", e)
+        }
+    }
+
     private fun cacheThumbnailLocally(remoteUrl: String?, safeTitle: String): String? {
         if (remoteUrl.isNullOrBlank() || !remoteUrl.startsWith("http")) return null
         return try {
@@ -918,21 +1664,9 @@ class DownloadEngine private constructor(private val context: Context) {
                clean.endsWith(".wav") || clean.endsWith(".ogg") || clean.endsWith(".flac")
     }
 
-    fun cancelActiveDownload() {
-        isCancelled = true
-        currentProcessId?.let { pid ->
-            try {
-                YoutubeDL.getInstance().destroyProcessById(pid)
-            } catch (e: Exception) {
-                Log.w(TAG, "Error destroying YoutubeDL process: ${e.message}")
-            }
-        }
-        _activeDownload.value = null
-    }
-
     fun pauseForLowMemory() {
-        Log.w(TAG, "Emergency Low Memory: Cancelling active download to prevent OOM")
-        cancelActiveDownload()
+        Log.w(TAG, "Emergency Low Memory: Pausing active download to prevent OOM crash")
+        pauseActiveDownload()
         System.gc()
     }
 
@@ -959,11 +1693,22 @@ class DownloadEngine private constructor(private val context: Context) {
     }
 
     private fun sanitizeFileName(name: String): String {
-        return name.replace(Regex("[^a-zA-Z0-9._-]"), "_").take(60)
+        return FileSecurityUtil.sanitizeFileName(name)
     }
 
     private fun sanitizeUrlInput(url: String): String {
-        return url.substringBefore("?si=").substringBefore("&si=").trim()
+        var cleaned = url.substringBefore("?si=").substringBefore("&si=").trim()
+        if (cleaned.startsWith("http://", ignoreCase = true)) {
+            val lower = cleaned.lowercase()
+            // Preserve local dev endpoints allowed by network_security_config
+            val isLocal = lower.startsWith("http://localhost") ||
+                    lower.startsWith("http://127.0.0.1") ||
+                    lower.startsWith("http://10.0.2.2")
+            if (!isLocal) {
+                cleaned = "https://" + cleaned.substring(7)
+            }
+        }
+        return cleaned
     }
 
     private fun generateFallbackTitle(url: String): String {
@@ -1175,5 +1920,15 @@ class DownloadEngine private constructor(private val context: Context) {
                 inst
             }
         }
+    }
+
+    fun resetForTesting() {
+        queuedTasks.clear()
+        cancelledTaskIds.clear()
+        pausedTaskIds.clear()
+        _downloadCards.value = emptyList()
+        _activeDownload.value = null
+        currentRunningTaskId = null
+        currentProcessId = null
     }
 }

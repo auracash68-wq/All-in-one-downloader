@@ -23,6 +23,7 @@ import com.example.engine.VideoMetadata
 import com.example.service.DownloadService
 import com.example.ui.components.StreamCleanTab
 import com.example.util.DeviceStatusMonitor
+import com.example.util.FileSecurityUtil
 import com.example.util.NetworkSpeedState
 import com.example.util.StatusLevel
 import kotlinx.coroutines.Dispatchers
@@ -147,6 +148,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val appearance = settingsManager.appearance
     val language = settingsManager.language
     val notificationsEnabled = settingsManager.notificationsEnabled
+
+    // Notification Permission Rationale State
+    private val _showNotificationPermissionRationale = MutableStateFlow(false)
+    val showNotificationPermissionRationale: StateFlow<Boolean> = _showNotificationPermissionRationale.asStateFlow()
+
+    private var pendingDownloadAction: (() -> Unit)? = null
+
+    fun checkAndRequestNotificationPermission(onProceed: () -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            !com.example.util.NotificationHelper.hasNotificationPermission(getApplication()) &&
+            !settingsManager.isNotificationPermissionAsked()
+        ) {
+            pendingDownloadAction = onProceed
+            _showNotificationPermissionRationale.value = true
+        } else {
+            onProceed()
+        }
+    }
+
+    fun onNotificationPermissionRationaleDismissed() {
+        _showNotificationPermissionRationale.value = false
+        settingsManager.setNotificationPermissionAsked(true)
+        val action = pendingDownloadAction
+        pendingDownloadAction = null
+        action?.invoke()
+    }
+
+    fun onNotificationPermissionRationaleAccepted() {
+        _showNotificationPermissionRationale.value = false
+        settingsManager.setNotificationPermissionAsked(true)
+    }
+
+    fun onNotificationPermissionResult(granted: Boolean) {
+        settingsManager.setNotificationPermissionAsked(true)
+        val action = pendingDownloadAction
+        pendingDownloadAction = null
+        action?.invoke()
+    }
 
     init {
         // Lightweight periodic status sampler (every 2.5s) for Internet Throughput
@@ -293,6 +332,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun confirmDownload(format: VideoFormatInfo) {
+        checkAndRequestNotificationPermission {
+            confirmDownloadInternal(format)
+        }
+    }
+
+    private fun confirmDownloadInternal(format: VideoFormatInfo) {
         val metadata = _formatDialogMetadata.value ?: _videoPreview.value ?: return
         val rawUrl = _urlInput.value.trim()
         if (rawUrl.isEmpty()) return
@@ -321,6 +366,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
+            if (downloadEngine.isAlreadyDownloadingOrQueued(rawUrl, mediaType)) {
+                withContext(Dispatchers.Main) {
+                    _formatDialogMetadata.value = null
+                    Toast.makeText(
+                        getApplication(),
+                        "Download in Progress\nThis media is already downloading or queued.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return@launch
+            }
+
             withContext(Dispatchers.Main) {
                 executeSingleDownload(format, metadata, rawUrl)
             }
@@ -341,13 +398,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val id = System.currentTimeMillis()
 
+            // Deterministic lifecycle: Record START in Room
+            val initialEntity = DownloadEntity(
+                id = id,
+                url = sanitizedUrl,
+                title = title,
+                fileName = "",
+                filePath = "",
+                status = "DOWNLOADING",
+                progress = 0,
+                duration = metadata.duration,
+                thumbnailUri = metadata.thumbnailUrl,
+                mediaType = mediaType,
+                resolution = format.resolution,
+                relativeDate = "Today",
+                timestamp = System.currentTimeMillis()
+            )
+            repository.insertOrUpdateDownload(initialEntity)
+
             // Start foreground service on main thread
             withContext(Dispatchers.Main) {
                 DownloadService.start(getApplication())
             }
 
-            // Enqueue to engine with real format ID and parameters.
-            // Entity is only persisted into Room upon verified completion.
+            // Enqueue to engine with real format ID and parameters
             downloadEngine.enqueueDownload(
                 entityId = id,
                 url = sanitizedUrl,
@@ -455,6 +529,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun confirmMultipleDownload(context: Context) {
+        checkAndRequestNotificationPermission {
+            confirmMultipleDownloadInternal(context)
+        }
+    }
+
+    private fun confirmMultipleDownloadInternal(context: Context) {
         val urls = _multipleUrls.value.map { it.trim() }.filter { it.isNotEmpty() }
         if (urls.size < 2) {
             Toast.makeText(context, "Please enter at least 2 valid links", Toast.LENGTH_SHORT).show()
@@ -493,6 +573,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val sanitizedUrl = sanitizeUrl(rawUrl)
                 val id = System.currentTimeMillis() + index
 
+                val initialEntity = DownloadEntity(
+                    id = id,
+                    url = sanitizedUrl,
+                    title = "Batch Download ${index + 1} of ${urls.size}",
+                    fileName = "",
+                    filePath = "",
+                    status = "DOWNLOADING",
+                    progress = 0,
+                    mediaType = mediaType,
+                    resolution = resolution,
+                    duration = "",
+                    thumbnailUri = null,
+                    relativeDate = "Today",
+                    timestamp = System.currentTimeMillis()
+                )
+                repository.insertOrUpdateDownload(initialEntity)
+
                 downloadEngine.enqueueDownload(
                     entityId = id,
                     url = sanitizedUrl,
@@ -513,11 +610,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelActiveDownload() {
         downloadEngine.cancelActiveDownload()
-        DownloadService.stop(getApplication())
+        if (!downloadEngine.hasActiveOrQueuedTasks()) {
+            DownloadService.stop(getApplication())
+        }
     }
 
     fun cancelDownload(id: Long) {
         downloadEngine.cancelDownload(id)
+        if (!downloadEngine.hasActiveOrQueuedTasks()) {
+            DownloadService.stop(getApplication())
+        }
+    }
+
+    fun pauseActiveDownload() {
+        downloadEngine.pauseActiveDownload()
+        if (!downloadEngine.hasActiveOrQueuedTasks()) {
+            DownloadService.pause(getApplication())
+        }
+    }
+
+    fun pauseDownload(id: Long) {
+        downloadEngine.pauseDownload(id)
+        if (!downloadEngine.hasActiveOrQueuedTasks()) {
+            DownloadService.pause(getApplication(), id)
+        }
+    }
+
+    fun resumeDownload(id: Long) {
+        downloadEngine.resumeTask(id)
+        DownloadService.resume(getApplication(), id)
     }
 
     fun dismissDownloadCard(id: Long) {
@@ -563,27 +684,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
             val file = java.io.File(item.filePath)
-            if (!file.exists() || file.length() <= 0) {
-                Toast.makeText(context, "File not found or empty on storage", Toast.LENGTH_SHORT).show()
-                return
-            }
-
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
+            val shareIntent = FileSecurityUtil.createShareIntent(
+                context = context,
+                file = file,
+                title = item.title,
+                mediaType = item.mediaType
             )
-
-            val isVideo = item.mediaType == "VIDEO" || file.name.endsWith(".mp4", ignoreCase = true)
-            val mimeType = if (isVideo) "video/mp4" else "audio/mpeg"
-
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = mimeType
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, item.title)
+            val chooser = Intent.createChooser(shareIntent, "Share via").apply {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(Intent.createChooser(shareIntent, "Share via"))
+            context.startActivity(chooser)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Security error sharing file: ${e.message}", e)
+            Toast.makeText(context, "Security error: cannot share unauthorized file", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Log.e(TAG, "Error sharing file via FileProvider", e)
             Toast.makeText(context, "Failed to share: ${e.message}", Toast.LENGTH_SHORT).show()

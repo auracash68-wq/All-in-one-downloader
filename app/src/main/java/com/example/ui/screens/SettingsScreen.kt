@@ -107,7 +107,7 @@ fun SettingsScreen(
                 .statusBarsPadding()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
-                .padding(bottom = 80.dp)
+                .padding(bottom = 100.dp)
         ) {
             // Header: "Settings" + Subtitle
             Text(

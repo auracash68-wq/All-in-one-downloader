@@ -1,18 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Restricted to only the approved media download folder -->
     <external-files-path
-        name="external_files"
-        path="." />
-    <files-path
-        name="internal_files"
-        path="." />
-    <external-path
-        name="external_storage"
-        path="." />
-    <cache-path
-        name="cache"
-        path="." />
-    <external-cache-path
-        name="external_cache"
-        path="." />
+        name="downloaded_media"
+        path="Download" />
+    <!-- Restricted to only the approved private media folder -->
+    <external-files-path
+        name="private_media"
+        path="private" />
 </paths>

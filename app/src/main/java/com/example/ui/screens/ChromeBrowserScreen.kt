@@ -4,6 +4,12 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.http.SslError
+import android.util.Log
+import android.view.ViewGroup
+import android.webkit.GeolocationPermissions
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -22,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -112,25 +119,26 @@ fun ChromeBrowserScreen(
         }
     }
 
+    // Handle edge-to-edge system bars gracefully
     val view = LocalView.current
     DisposableEffect(Unit) {
         val window = (view.context as? Activity)?.window
-        val insetsController = window?.let { WindowInsetsControllerCompat(it, view) }
-        insetsController?.let { controller ->
-            controller.hide(WindowInsetsCompat.Type.systemBars())
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        window?.let { w ->
+            val controller = WindowInsetsControllerCompat(w, view)
+            controller.isAppearanceLightStatusBars = true
         }
-        onDispose {
-            window?.let { w ->
-                val controller = WindowInsetsControllerCompat(w, view)
-                controller.show(WindowInsetsCompat.Type.systemBars())
-            }
-        }
+        onDispose {}
     }
 
     fun navigateTo(queryOrUrl: String) {
         val trimmed = queryOrUrl.trim()
-        val target = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+        val target = if (trimmed.startsWith("http://", ignoreCase = true)) {
+            val lower = trimmed.lowercase()
+            val isLocal = lower.startsWith("http://localhost") ||
+                    lower.startsWith("http://127.0.0.1") ||
+                    lower.startsWith("http://10.0.2.2")
+            if (isLocal) trimmed else "https://" + trimmed.substring(7)
+        } else if (trimmed.startsWith("https://", ignoreCase = true)) {
             trimmed
         } else if (trimmed.contains(".") && !trimmed.contains(" ")) {
             "https://$trimmed"
@@ -294,7 +302,24 @@ fun ChromeBrowserScreen(
                             settings.builtInZoomControls = true
                             settings.displayZoomControls = false
                             settings.mediaPlaybackRequiresUserGesture = false
-                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            @Suppress("DEPRECATION")
+                            settings.allowFileAccessFromFileURLs = false
+                            @Suppress("DEPRECATION")
+                            settings.allowUniversalAccessFromFileURLs = false
+                            settings.setGeolocationEnabled(false)
+                            settings.saveFormData = false
+
+                            setDownloadListener { downloadUrl, _, _, mimetype, _ ->
+                                if (downloadUrl.startsWith("https://") || downloadUrl.startsWith("http://")) {
+                                    Log.i("ChromeBrowserScreen", "Direct download intercepted: $downloadUrl ($mimetype)")
+                                    viewModel.onUrlChanged(downloadUrl)
+                                    Toast.makeText(context, "URL sent to Downloader", Toast.LENGTH_SHORT).show()
+                                    onBack?.invoke()
+                                }
+                            }
 
                             webChromeClient = object : WebChromeClient() {
                                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -305,52 +330,110 @@ fun ChromeBrowserScreen(
                                 override fun onReceivedTitle(view: WebView?, title: String?) {
                                     pageTitle = title ?: ""
                                 }
+
+                                override fun onGeolocationPermissionsShowPrompt(
+                                    origin: String?,
+                                    callback: GeolocationPermissions.Callback?
+                                ) {
+                                    callback?.invoke(origin, false, false)
+                                }
                             }
 
                             webViewClient = object : WebViewClient() {
+                                override fun onReceivedSslError(
+                                    view: WebView?,
+                                    handler: SslErrorHandler?,
+                                    error: SslError?
+                                ) {
+                                    Log.e("ChromeBrowserScreen", "SSL certificate error encountered: $error. Connection blocked.")
+                                    handler?.cancel() // Never blindly proceed on certificate failure
+                                }
+
                                 override fun shouldOverrideUrlLoading(
                                     view: WebView?,
                                     request: WebResourceRequest?
                                 ): Boolean {
                                     val uri = request?.url ?: return false
                                     val url = uri.toString()
+                                    val scheme = uri.scheme?.lowercase() ?: ""
 
-                                    if (url.startsWith("http://") || url.startsWith("https://")) {
-                                        return false // Let WebView handle normal web URLs
+                                    // 1. Block dangerous internal and script schemes
+                                    if (scheme == "javascript" || scheme == "file" || scheme == "content" || scheme == "data") {
+                                        Log.w("ChromeBrowserScreen", "Blocked dangerous URL scheme navigation: $scheme")
+                                        return true
                                     }
 
-                                    try {
-                                        if (url.startsWith("intent://")) {
-                                            val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                                            if (intent != null) {
-                                                val context = view?.context ?: return true
-                                                try {
-                                                    context.startActivity(intent)
-                                                    return true
-                                                } catch (e: Exception) {
-                                                    val fallbackUrl = intent.getStringExtra("browser_fallback_url")
-                                                    if (!fallbackUrl.isNullOrEmpty()) {
-                                                        view?.loadUrl(fallbackUrl)
-                                                        return true
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            val intent = Intent(Intent.ACTION_VIEW, uri)
-                                            intent.addCategory(Intent.CATEGORY_BROWSABLE)
-                                            val context = view?.context ?: return true
-                                            try {
-                                                context.startActivity(intent)
-                                                return true
-                                            } catch (e: Exception) {
-                                                // No handler available for custom scheme
+                                    // 2. Standard Web protocols (HTTPS / HTTP)
+                                    if (scheme == "http" || scheme == "https") {
+                                        // Prefer HTTPS: if unencrypted HTTP for external domains, upgrade
+                                        if (scheme == "http") {
+                                            val host = uri.host?.lowercase() ?: ""
+                                            val isLocal = host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2"
+                                            if (!isLocal) {
+                                                val secureUrl = url.replaceFirst("http://", "https://")
+                                                view?.loadUrl(secureUrl)
                                                 return true
                                             }
                                         }
-                                    } catch (e: Exception) {
-                                        // Catch all to prevent any crash
+                                        return false // Let WebView handle legitimate web URLs
                                     }
-                                    return true // Consume unhandled non-http schemes to prevent ERR_UNKNOWN_URL_SCHEME
+
+                                    // 3. Handle intent:// URLs safely
+                                    if (scheme == "intent") {
+                                        try {
+                                            val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
+                                            if (intent != null) {
+                                                // Security hardening for parsed intent:
+                                                intent.addCategory(Intent.CATEGORY_BROWSABLE)
+                                                intent.component = null
+                                                intent.selector = null
+                                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+
+                                                val context = view?.context ?: return true
+                                                val pm = context.packageManager
+                                                if (intent.resolveActivity(pm) != null) {
+                                                    context.startActivity(intent)
+                                                    return true
+                                                } else {
+                                                    val fallbackUrl = intent.getStringExtra("browser_fallback_url")
+                                                    if (!fallbackUrl.isNullOrEmpty()) {
+                                                        val fallbackUri = android.net.Uri.parse(fallbackUrl)
+                                                        val fallbackScheme = fallbackUri.scheme?.lowercase()
+                                                        if (fallbackScheme == "https" || fallbackScheme == "http") {
+                                                            view?.loadUrl(fallbackUrl)
+                                                            return true
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.w("ChromeBrowserScreen", "Error handling intent scheme: ${e.message}")
+                                        }
+                                        return true
+                                    }
+
+                                    // 4. Whitelisted safe external schemes (market:, tel:, mailto:, sms:)
+                                    val safeExternalSchemes = setOf("market", "tel", "mailto", "sms")
+                                    if (safeExternalSchemes.contains(scheme)) {
+                                        try {
+                                            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                                addCategory(Intent.CATEGORY_BROWSABLE)
+                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            }
+                                            val context = view?.context ?: return true
+                                            if (intent.resolveActivity(context.packageManager) != null) {
+                                                context.startActivity(intent)
+                                                return true
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.w("ChromeBrowserScreen", "Error launching external scheme $scheme: ${e.message}")
+                                        }
+                                        return true
+                                    }
+
+                                    // Block all other unknown/unsupported schemes
+                                    Log.w("ChromeBrowserScreen", "Blocked unsupported URL scheme: $scheme")
+                                    return true
                                 }
 
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -372,6 +455,17 @@ fun ChromeBrowserScreen(
                                     canGoBack = view?.canGoBack() == true
                                     canGoForward = view?.canGoForward() == true
                                 }
+
+                                override fun onRenderProcessGone(
+                                    view: WebView?,
+                                    detail: RenderProcessGoneDetail?
+                                ): Boolean {
+                                    val parent = view?.parent as? ViewGroup
+                                    parent?.removeView(view)
+                                    view?.destroy()
+                                    webViewInstance = null
+                                    return true
+                                }
                             }
 
                             loadUrl(currentUrl)
@@ -391,6 +485,7 @@ fun ChromeBrowserScreen(
                     .fillMaxWidth()
                     .background(CardSurface)
                     .border(0.5.dp, CardBorder)
+                    .then(if (onBack != null) Modifier.navigationBarsPadding() else Modifier.padding(bottom = 80.dp))
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

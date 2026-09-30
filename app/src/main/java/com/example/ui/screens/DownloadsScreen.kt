@@ -109,7 +109,7 @@ fun DownloadsScreen(
                 .statusBarsPadding()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
-                .padding(bottom = 80.dp)
+                .padding(bottom = 100.dp)
         ) {
             // Header Row: "Downloads" title + "Private Files" button + count badge on right
             Row(

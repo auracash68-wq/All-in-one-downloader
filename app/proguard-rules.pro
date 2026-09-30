@@ -1,21 +1,54 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ==============================================================================
+# StreamClean ProGuard & R8 Optimization Rules
+# ==============================================================================
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Preserve attributes required for stack traces, annotations, and reflection
+-keepattributes SourceFile,LineNumberTable,Signature,InnerClasses,EnclosingMethod,*Annotation*
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ------------------------------------------------------------------------------
+# 1. youtubedl-android & FFmpeg JNI / Native interfaces & Data mappers
+# ------------------------------------------------------------------------------
+# Preserve JNI methods so native C/C++ libraries can link dynamically
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Preserve youtubedl-android core API and DTO mapper classes
+-keep class com.yausername.youtubedl_android.YoutubeDL { *; }
+-keep class com.yausername.youtubedl_android.YoutubeDLException { *; }
+-keep class com.yausername.youtubedl_android.YoutubeDLRequest { *; }
+-keep class com.yausername.youtubedl_android.YoutubeDLResponse { *; }
+-keep class com.yausername.youtubedl_android.mapper.** { *; }
+-keep class com.yausername.ffmpeg.** { *; }
+
+# ------------------------------------------------------------------------------
+# 2. Room Database Entities, DAOs, and Database Classes
+# ------------------------------------------------------------------------------
+# Keep Room entities so reflection and column mappings are preserved
+-keep class com.example.data.local.DownloadEntity { *; }
+-keep interface com.example.data.local.DownloadDao { *; }
+-keep class * extends androidx.room.RoomDatabase
+
+# ------------------------------------------------------------------------------
+# 3. Media3 / ExoPlayer Codec & Renderer Reflection
+# ------------------------------------------------------------------------------
+# Preserve constructor reflection for ExoPlayer renderers and audio/video decoders
+-keep class androidx.media3.exoplayer.** {
+    <init>(...);
+}
+-keep class androidx.media3.common.MediaItem { *; }
+-keep class androidx.media3.common.PlaybackException { *; }
+-keep class androidx.media3.common.PlaybackParameters { *; }
+-keep class androidx.media3.ui.PlayerView { *; }
+
+# ------------------------------------------------------------------------------
+# 4. Coil Image Loading Library
+# ------------------------------------------------------------------------------
+-keep class coil.** { *; }
+
+# ------------------------------------------------------------------------------
+# 5. Application Services and FileProvider
+# ------------------------------------------------------------------------------
+-keep class com.example.service.DownloadService { *; }
+-keep class androidx.core.content.FileProvider { *; }
+-keep class com.example.MainActivity { *; }

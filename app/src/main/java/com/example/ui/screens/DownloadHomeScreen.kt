@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import com.example.ui.components.SocialMediaButton
 import androidx.compose.ui.res.painterResource
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.FileDownload
@@ -125,6 +128,13 @@ fun DownloadHomeScreen(
     // Dialog states (Features 3, 4, 5, 6, 7)
     val showMultipleUrlDialog by viewModel.showMultipleUrlDialog.collectAsState()
     val showLowMemoryDialog by viewModel.showLowMemoryDialog.collectAsState()
+    val showNotificationPermissionRationale by viewModel.showNotificationPermissionRationale.collectAsState()
+
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        viewModel.onNotificationPermissionResult(isGranted)
+    }
 
     val scrollState = rememberScrollState()
 
@@ -139,7 +149,7 @@ fun DownloadHomeScreen(
                 .statusBarsPadding()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 16.dp)
-                .padding(bottom = 80.dp)
+                .padding(bottom = 100.dp)
         ) {
             // Header Row: "Download" Title + Compact Internet Speed Indicator
             Row(
@@ -570,7 +580,8 @@ fun DownloadHomeScreen(
                         )
                     },
                     onDismiss = { id -> viewModel.dismissDownloadCard(id) },
-                    onCancel = { id -> viewModel.cancelDownload(id) }
+                    onCancel = { id -> viewModel.cancelDownload(id) },
+                    onResume = { id -> viewModel.resumeDownload(id) }
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
@@ -636,6 +647,60 @@ fun DownloadHomeScreen(
                 dismissButton = {
                     TextButton(onClick = { viewModel.continueDownloadDespiteMemoryWarning() }) {
                         Text(strings.downloadAnywayBtn, color = TextSecondary)
+                    }
+                },
+                shape = RoundedCornerShape(16.dp),
+                containerColor = CardSurface
+            )
+        }
+
+        // Notification Permission Rationale Dialog (Android 13+)
+        if (showNotificationPermissionRationale) {
+            AlertDialog(
+                onDismissRequest = { viewModel.onNotificationPermissionRationaleDismissed() },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Outlined.FileDownload,
+                        contentDescription = "Notifications",
+                        tint = PrimaryGreen,
+                        modifier = Modifier.size(36.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        text = "Enable Download Notifications",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = TextPrimary
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Allow StreamClean to send notifications so you can track download progress in the background and know when your media is ready.",
+                        fontSize = 14.sp,
+                        color = TextSecondary,
+                        lineHeight = 20.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.onNotificationPermissionRationaleAccepted()
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                permissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                viewModel.onNotificationPermissionResult(true)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryGreen),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Allow", color = Color.White)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.onNotificationPermissionRationaleDismissed() }) {
+                        Text("Not Now", color = TextSecondary)
                     }
                 },
                 shape = RoundedCornerShape(16.dp),
@@ -962,6 +1027,10 @@ fun FormatSelectionDialog(
         )
     }
 
+    BackHandler {
+        onDismiss()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -995,7 +1064,8 @@ fun FormatSelectionDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp)
+                        .navigationBarsPadding()
+                        .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 100.dp)
                 ) {
                     // Drag Handle
                     Box(
@@ -1122,6 +1192,7 @@ fun DownloadItemCard(
     onPlay: (ActiveDownloadState) -> Unit,
     onDismiss: (Long) -> Unit,
     onCancel: (Long) -> Unit,
+    onResume: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -1219,6 +1290,27 @@ fun DownloadItemCard(
                                 )
                             }
                         }
+                        download.isPaused -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Pause,
+                                    contentDescription = "Paused",
+                                    tint = Color(0xFFEAB308),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (download.speed.isNotEmpty()) "${download.speed} • ${download.progress}%" else "Paused • ${download.progress}%",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFFEAB308),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                         download.isFailed -> {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1240,6 +1332,47 @@ fun DownloadItemCard(
                                 )
                             }
                         }
+                        download.isCancelled -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancelled",
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Download cancelled",
+                                    fontSize = 12.sp,
+                                    color = TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        download.isVerifying -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    color = PrimaryGreen,
+                                    strokeWidth = 1.5.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Verifying output...",
+                                    fontSize = 12.sp,
+                                    color = PrimaryGreen,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                         download.isRunning -> {
                             val spd = download.speed
                             val queueInfo = if (download.queueTotal > 1) {
@@ -1254,6 +1387,18 @@ fun DownloadItemCard(
                             }
                             Text(
                                 text = statusStr,
+                                fontSize = 12.sp,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        else -> {
+                            val queueInfo = if (download.queueTotal > 1) {
+                                "Queue ${download.queueIndex}/${download.queueTotal} • "
+                            } else ""
+                            Text(
+                                text = "${queueInfo}Queued...",
                                 fontSize = 12.sp,
                                 color = TextSecondary,
                                 maxLines = 1,
@@ -1293,7 +1438,34 @@ fun DownloadItemCard(
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                } else if (download.isFailed) {
+                } else if (download.isPaused) {
+                    IconButton(
+                        onClick = { onResume(download.id) },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(PrimaryGreen)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Resume",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = { onDismiss(download.id) },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else if (download.isFailed || download.isCancelled) {
                     IconButton(
                         onClick = { onDismiss(download.id) },
                         modifier = Modifier.size(24.dp)

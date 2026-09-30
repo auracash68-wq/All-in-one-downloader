@@ -32,6 +32,14 @@ class SettingsManager(context: Context) {
         _notificationsEnabled.value = enabled
     }
 
+    fun isNotificationPermissionAsked(): Boolean {
+        return prefs.getBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, false)
+    }
+
+    fun setNotificationPermissionAsked(asked: Boolean) {
+        prefs.edit().putBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, asked).apply()
+    }
+
     fun setAppearance(option: String) {
         prefs.edit().putString(KEY_APPEARANCE, option).apply()
         _appearance.value = option
@@ -54,6 +62,7 @@ class SettingsManager(context: Context) {
         const val KEY_APPEARANCE = "key_appearance"
         const val KEY_LANGUAGE = "key_language"
         const val KEY_NOTIFICATIONS = "key_notifications"
+        const val KEY_NOTIFICATION_PERMISSION_ASKED = "key_notification_permission_asked"
         const val APP_VERSION = "StreamClean V1.0.0"
 
         val SUPPORTED_LANGUAGES = listOf("English", "বাংলা", "हिन्दी")

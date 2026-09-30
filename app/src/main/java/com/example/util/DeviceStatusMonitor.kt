@@ -2,6 +2,8 @@ package com.example.util
 
 import android.app.ActivityManager
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.TrafficStats
 import androidx.compose.ui.graphics.Color
 
@@ -32,6 +34,16 @@ class DeviceStatusMonitor(private val context: Context) {
         val memoryInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memoryInfo)
         return memoryInfo.lowMemory || memoryInfo.availMem < THRESHOLD_CRITICAL_RAM_BYTES
+    }
+
+    /**
+     * Checks if the device has an active, working network connection.
+     */
+    fun isNetworkConnected(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     fun sampleInternetSpeed(): NetworkSpeedState {

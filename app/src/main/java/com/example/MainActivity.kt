@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -13,10 +14,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -54,6 +57,22 @@ class MainActivity : AppCompatActivity() {
                 "Dark" -> true
                 "Light" -> false
                 else -> isSystemInDarkTheme()
+            }
+
+            DisposableEffect(isDarkTheme) {
+                enableEdgeToEdge(
+                    statusBarStyle = if (isDarkTheme) {
+                        SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                    } else {
+                        SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                    },
+                    navigationBarStyle = if (isDarkTheme) {
+                        SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                    } else {
+                        SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                    }
+                )
+                onDispose {}
             }
 
             val appStrings = getAppStrings(language)
@@ -130,6 +149,7 @@ fun StreamCleanMainApp(
                         )
                     }
                 },
+                contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 containerColor = Color.Transparent
             ) { paddingValues ->
                 Box(

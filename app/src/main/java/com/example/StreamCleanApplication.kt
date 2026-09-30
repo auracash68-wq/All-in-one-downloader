@@ -37,6 +37,15 @@ class StreamCleanApplication : Application() {
         createNotificationChannel()
         com.example.util.NotificationHelper.createNotificationChannels(this)
 
+        // Trigger recovery of any downloads interrupted by prior process death or system shutdown
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                com.example.engine.DownloadEngine.getInstance(this@StreamCleanApplication).recoverInterruptedDownloads()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error recovering interrupted downloads: ${e.message}")
+            }
+        }
+
         // Ensure WebView cache directories exist to prevent first-launch filesystem warnings
         try {
             val webViewCacheDir = java.io.File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js")

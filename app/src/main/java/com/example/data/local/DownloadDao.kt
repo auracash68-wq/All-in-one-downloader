@@ -45,4 +45,33 @@ interface DownloadDao {
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("UPDATE downloads SET status = :status, progress = :progress WHERE id = :id")
+    suspend fun updateStatus(id: Long, status: String, progress: Int)
+
+    @Query("UPDATE downloads SET progress = :progress, downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, lastUpdated = :now WHERE id = :id")
+    suspend fun updateProgress(id: Long, progress: Int, downloadedBytes: Long, totalBytes: Long, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE downloads SET status = :status, progress = :progress, errorMessage = :error, tempFilePath = :tempFilePath, lastUpdated = :now WHERE id = :id")
+    suspend fun updateStatusDetails(
+        id: Long,
+        status: String,
+        progress: Int,
+        error: String = "",
+        tempFilePath: String = "",
+        now: Long = System.currentTimeMillis()
+    )
+
+    @Query("SELECT * FROM downloads WHERE status IN ('DOWNLOADING', 'VERIFYING', 'PENDING') ORDER BY timestamp ASC")
+    suspend fun getInterruptedDownloads(): List<DownloadEntity>
+
+    @Query("UPDATE downloads SET status = :status, errorMessage = :error, lastUpdated = :now WHERE status IN ('DOWNLOADING', 'VERIFYING', 'PENDING')")
+    suspend fun markInterruptedDownloadsAsPaused(
+        status: String = "PAUSED",
+        error: String = "Interrupted by system shutdown",
+        now: Long = System.currentTimeMillis()
+    )
+
+    @Query("SELECT * FROM downloads WHERE status = 'PAUSED' ORDER BY timestamp DESC")
+    fun getPausedDownloads(): Flow<List<DownloadEntity>>
 }
