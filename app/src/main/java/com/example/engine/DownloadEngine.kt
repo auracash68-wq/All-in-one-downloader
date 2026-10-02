@@ -51,6 +51,7 @@ enum class ExtractionErrorKind {
     PROCESS_TIMEOUT,
     PROCESS_CANCELLED,
     INVALID_METADATA,
+    RATE_LIMITED,
     UNKNOWN_ERROR
 }
 
@@ -327,10 +328,10 @@ class DownloadEngine private constructor(private val context: Context) {
             // For public YouTube URLs where scraper got bot-challenged, check official oEmbed API
             if (isYouTubeUrl(sanitized)) {
                 val supplemental = fetchOEmbedSupplemental(sanitized)
+                val ytId = extractYouTubeVideoId(sanitized)
                 if (supplemental != null && supplemental.first.isNotBlank()) {
                     val fallbackTitle = supplemental.first
                     val fallbackThumb = supplemental.second.ifBlank {
-                        val ytId = extractYouTubeVideoId(sanitized)
                         if (!ytId.isNullOrEmpty()) "https://img.youtube.com/vi/$ytId/hqdefault.jpg" else null
                     }
                     val videoFormats = generateDefaultVideoFormats(0)
@@ -345,12 +346,29 @@ class DownloadEngine private constructor(private val context: Context) {
                         videoFormats = videoFormats,
                         audioFormats = audioFormats
                     )
+                } else if (!ytId.isNullOrEmpty()) {
+                    val fallbackTitle = "YouTube Video ($ytId)"
+                    val fallbackThumb = "https://img.youtube.com/vi/$ytId/hqdefault.jpg"
+                    val videoFormats = generateDefaultVideoFormats(0)
+                    val audioFormats = parseAudioFormats(null, 0)
+                    Log.i(TAG, "[GET_INFO_SUCCESS] Recovered YouTube metadata via Video ID fallback: '$fallbackTitle'")
+                    Log.i(TAG, "[FETCH_COMPLETE] Completed format fetch for '$fallbackTitle' via Video ID fallback in ${System.currentTimeMillis() - startTime}ms")
+                    return@withContext VideoMetadata(
+                        title = fallbackTitle,
+                        duration = "",
+                        durationSeconds = 0,
+                        thumbnailUrl = fallbackThumb,
+                        videoFormats = videoFormats,
+                        audioFormats = audioFormats
+                    )
                 }
             }
 
             // Classify failure into structured, helpful user message
             val errMsg = (extractionError?.message ?: "").lowercase()
             val kind = when {
+                errMsg.contains("rate limit") || errMsg.contains("too many requests") || errMsg.contains("429") || errMsg.contains("http error 429") ->
+                    ExtractionErrorKind.RATE_LIMITED
                 errMsg.contains("sign in to confirm") || errMsg.contains("login required") || errMsg.contains("account required") ->
                     ExtractionErrorKind.AUTHENTICATION_REQUIRED
                 errMsg.contains("private video") || errMsg.contains("this video is private") || errMsg.contains("video unavailable") || errMsg.contains("removed") ->
@@ -365,6 +383,7 @@ class DownloadEngine private constructor(private val context: Context) {
                     ExtractionErrorKind.EXTRACTION_ERROR
             }
             val userMsg = when (kind) {
+                ExtractionErrorKind.RATE_LIMITED -> "Download rate limit reached. Please wait a moment and try again."
                 ExtractionErrorKind.AUTHENTICATION_REQUIRED -> "This video requires login or authentication to access."
                 ExtractionErrorKind.PRIVATE_CONTENT -> "This video is private, unavailable, or restricted by the author."
                 ExtractionErrorKind.UNSUPPORTED_URL -> "Unsupported video URL format. Please check the link."
@@ -468,12 +487,16 @@ class DownloadEngine private constructor(private val context: Context) {
 
     private fun fetchOEmbedSupplemental(url: String): Pair<String, String>? {
         return try {
-            val encodedUrl = java.net.URLEncoder.encode(url, "UTF-8")
+            val ytId = extractYouTubeVideoId(url)
+            val canonicalUrl = if (!ytId.isNullOrEmpty()) "https://www.youtube.com/watch?v=$ytId" else url
+            val encodedUrl = java.net.URLEncoder.encode(canonicalUrl, "UTF-8")
             val oembedUrl = "https://www.youtube.com/oembed?url=$encodedUrl&format=json"
-            val connection = URL(oembedUrl).openConnection() as HttpURLConnection
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile)")
+            val connection = (URL(oembedUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14; Mobile)")
+            }
             connection.connect()
 
             if (connection.responseCode == 200) {
